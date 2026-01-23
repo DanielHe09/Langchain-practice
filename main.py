@@ -29,3 +29,7 @@ async def health():
 async def read_item(item_id: int, q: str = None):
     """Example endpoint with path and query parameters"""
     return {"item_id": item_id, "q": q}
+
+@app.get("/api/retreival/")
+async def retreival():
+    
