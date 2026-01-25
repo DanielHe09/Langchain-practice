@@ -14,6 +14,12 @@ export default defineConfig({
           resolve(__dirname, 'dist/manifest.json')
         )
         
+        // Copy background script
+        copyFileSync(
+          resolve(__dirname, 'src/background.js'),
+          resolve(__dirname, 'dist/background.js')
+        )
+        
         // Fix paths in popup.html to be relative for Chrome extension
         const htmlPath = resolve(__dirname, 'dist/popup.html')
         let html = readFileSync(htmlPath, 'utf-8')
