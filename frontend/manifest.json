@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "LangChain Chatbot",
+  "version": "1.0.0",
+  "description": "Chatbot extension that connects to your LangChain backend",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LangChain Chatbot"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ]
+}
