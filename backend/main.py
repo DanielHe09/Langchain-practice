@@ -13,6 +13,9 @@ from io import BytesIO
 from pydantic import BaseModel
 from typing import Optional, List
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+import base64
+import httpx
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -61,6 +64,154 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response model for chat endpoint"""
     response: str
+
+
+class ScreenshotRequest(BaseModel):
+    """Request model for screenshot embedding"""
+    source_url: str
+    captured_at: str  # ISO string
+    title: Optional[str] = None
+    screenshot_data: str  # Base64 encoded image data (optional, stored but not used for text extraction)
+
+def extract_text_from_url(url: str) -> str:
+    """
+    Extract text content from a webpage URL
+    Falls back to basic HTML parsing if requests fail
+    """
+    try:
+        # Try to fetch the webpage content
+        response = httpx.get(url, timeout=10.0, follow_redirects=True)
+        response.raise_for_status()
+        
+        # Parse HTML and extract text
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        
+        # Get text content
+        text = soup.get_text(separator=' ', strip=True)
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+        
+        return text if text else ""
+    except Exception as e:
+        print(f"Error extracting text from URL {url}: {str(e)}")
+        return ""
+
+
+@app.post("/api/embed-screenshot/")
+async def embed_screenshot(request: ScreenshotRequest):
+    """
+    Receive screenshot data, extract text, create embeddings, and store in MongoDB
+    """
+    try:
+        print(f"\n{'='*60}")
+        print(f"📸 DEBUG: Screenshot received!")
+        print(f"   URL: {request.source_url}")
+        print(f"   Title: {request.title}")
+        print(f"   Captured at: {request.captured_at}")
+        print(f"   Screenshot data size: {len(request.screenshot_data) if request.screenshot_data else 0} bytes")
+        print(f"{'='*60}\n")
+        
+        # Extract text from the webpage URL (more reliable than OCR for text content)
+        print(f"🔍 DEBUG: Extracting text from URL: {request.source_url}")
+        text = extract_text_from_url(request.source_url)
+        print(f"   Extracted text length: {len(text)} characters")
+        
+        if not text.strip():
+            # If no text extracted, return a message (could add OCR fallback here)
+            print(f"❌ DEBUG: No text extracted from URL")
+            raise HTTPException(
+                status_code=400, 
+                detail="Could not extract text from webpage. The page might require JavaScript or be inaccessible."
+            )
+        
+        # Initialize Google Generative AI
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        
+        # Split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+        )
+        chunks = text_splitter.split_text(text)
+        print(f"📝 DEBUG: Split text into {len(chunks)} chunks")
+        
+        # Create embeddings for each chunk
+        embeddings_collection = get_embeddings_collection()
+        document_id = str(uuid.uuid4())
+        print(f"🆔 DEBUG: Generated document_id: {document_id}")
+        
+        documents_to_insert = []
+        print(f"🔢 DEBUG: Creating embeddings for {len(chunks)} chunks...")
+        for i, chunk in enumerate(chunks):
+            # Generate embedding using Google's embedding model
+            result = genai.embed_content(
+                model="models/embedding-001",
+                content=chunk,
+                task_type="retrieval_document"
+            )
+            embedding = result['embedding']
+            
+            # Prepare document for MongoDB with specified fields
+            doc = {
+                "document_id": document_id,
+                "source_type": "web_screenshot",
+                "source_url": request.source_url,
+                "captured_at": request.captured_at,
+                "title": request.title,
+                "filename": request.source_url,  # Use URL as filename for compatibility
+                "chunk_index": i,
+                "text": chunk,
+                "embedding": embedding,
+                "created_at": datetime.utcnow(),
+                "metadata": {
+                    "total_chunks": len(chunks),
+                    "has_screenshot": True,
+                    "screenshot_size": len(request.screenshot_data) if request.screenshot_data else 0
+                }
+            }
+            documents_to_insert.append(doc)
+            if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
+                print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
+        
+        # Insert all documents into MongoDB
+        if documents_to_insert:
+            print(f"\n💾 DEBUG: Inserting {len(documents_to_insert)} documents into MongoDB...")
+            result = embeddings_collection.insert_many(documents_to_insert)
+            print(f"   ✓ Successfully inserted {len(result.inserted_ids)} documents")
+            print(f"   ✓ Document IDs: {result.inserted_ids[:3]}..." if len(result.inserted_ids) > 3 else f"   ✓ Document IDs: {result.inserted_ids}")
+            print(f"\n✅ DEBUG: Screenshot successfully stored in MongoDB!")
+            print(f"   Document ID: {document_id}")
+            print(f"   Source URL: {request.source_url}")
+            print(f"   Total chunks: {len(documents_to_insert)}")
+            print(f"{'='*60}\n")
+            
+            return {
+                "status": "success",
+                "message": f"Screenshot embedded and stored successfully",
+                "document_id": document_id,
+                "source_url": request.source_url,
+                "chunks_created": len(documents_to_insert),
+                "inserted_ids": len(result.inserted_ids)
+            }
+        else:
+            print(f"❌ DEBUG: No documents to insert!")
+            raise HTTPException(status_code=500, detail="Failed to create embeddings")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"\n❌ DEBUG: Error processing screenshot: {str(e)}")
+        print(f"{'='*60}\n")
+        raise HTTPException(status_code=500, detail=f"Error processing screenshot: {str(e)}")
+
 
 @app.post("/api/embed-pdf/")
 async def embed_pdf(file: UploadFile = File(...)):
