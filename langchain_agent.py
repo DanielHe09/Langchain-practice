@@ -3,28 +3,25 @@ import numpy as np
 import google.generativeai as genai
 from mongo_client import get_embeddings_collection
 from dotenv import load_dotenv
+from langchain_community.chat_models import ChatOpenAI
 
 load_dotenv()
 
-# Get API key from environment variable or use placeholder
+# Get API keys from environment variables
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Configure Google Generative AI for embeddings
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# Note: Agent initialization commented out due to LangChain 1.x API changes
-# If you need agent functionality, use langchain-experimental or update to new agent API
-# from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain.agents import initialize_agent, AgentType
-# from langchain.tools import Tool
-
-# def run_agent(query: str) -> str:
-#     """Run the agent with a query"""
-#     try:
-#         response = agent.run(query)
-#         return response
-#     except Exception as e:
-#         return f"Error: {str(e)}"
+# Initialize GPT-4o-mini LLM for the chatbot
+# Note: OPENAI_API_KEY should be set in your .env file or environment variable
+# ChatOpenAI will automatically read from OPENAI_API_KEY environment variable if not provided
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.7,
+    openai_api_key=OPENAI_API_KEY if OPENAI_API_KEY else None
+)
 
 
 def cosine_similarity(vec1, vec2):
@@ -89,32 +86,6 @@ def retrieve_documents(query: str, top_k: int = 3) -> list:
         print(f"Error in retrieval: {str(e)}")
         return []
 
-
-def retrieve_and_format(query: str, top_k: int = 3) -> str:
-    """
-    Retrieve documents and format them as a readable string
-    
-    Args:
-        query: The search query string
-        top_k: Number of top results to return
-    
-    Returns:
-        Formatted string with retrieved document information
-    """
-    results = retrieve_documents(query, top_k)
-    
-    if not results:
-        return "No relevant documents found."
-    
-    formatted_output = f"Found {len(results)} relevant document(s):\n\n"
-    
-    for i, result in enumerate(results, 1):
-        formatted_output += f"--- Result {i} (Similarity: {result['similarity']:.4f}) ---\n"
-        formatted_output += f"Source: {result['filename']}\n"
-        formatted_output += f"Chunk {result['chunk_index']}\n"
-        formatted_output += f"Text: {result['text'][:500]}...\n\n"
-    
-    return formatted_output
 
 if __name__ == "__main__":
     # Test retrieval function

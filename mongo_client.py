@@ -12,8 +12,9 @@ load_dotenv()
 username = quote_plus(os.getenv("MONGO_USERNAME", ""))
 password = quote_plus(os.getenv("MONGO_PASSWORD", ""))
 
-# Use standard connection string (non-SRV) to avoid DNS resolver timeout issues
-uri = f"mongodb://{username}:{password}@ac-qucaeld-shard-00-00.udlewkq.mongodb.net:27017,ac-qucaeld-shard-00-01.udlewkq.mongodb.net:27017,ac-qucaeld-shard-00-02.udlewkq.mongodb.net:27017/?ssl=true&authSource=admin&retryWrites=true&w=majority&appName=langchainPractice&directConnection=false"
+# Use SRV connection string (preferred for MongoDB Atlas)
+# If DNS resolution fails, check your network connection
+uri = f"mongodb+srv://{username}:{password}@langchainpractice.udlewkq.mongodb.net/?appName=langchainPractice&retryWrites=true&w=majority"
 
 # Lazy connection - don't connect until first use to avoid DNS timeout on import
 _client = None
@@ -28,9 +29,9 @@ def get_client():
             uri, 
             server_api=ServerApi('1'),
             tlsAllowInvalidCertificates=True,
-            serverSelectionTimeoutMS=15000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000
+            serverSelectionTimeoutMS=20000,
+            connectTimeoutMS=15000,
+            socketTimeoutMS=15000
         )
     return _client
 

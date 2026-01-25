@@ -1,17 +1,18 @@
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import google.generativeai as genai
 from mongo_client import get_embeddings_collection
-from langchain_agent import retrieve_documents
+from langchain_agent import retrieve_documents, llm
 from datetime import datetime
 import uuid
 from dotenv import load_dotenv
 from io import BytesIO
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 load_dotenv()
 
@@ -44,128 +45,22 @@ async def read_item(item_id: int, q: str = None):
     """Example endpoint with path and query parameters"""
     return {"item_id": item_id, "q": q}
 
-class RetrievalQuery(BaseModel):
-    """Request model for retrieval endpoint"""
-    query: str
-    top_k: Optional[int] = 3
+
+class Message(BaseModel):
+    """Message model for conversation history"""
+    role: str  # "user" or "assistant"
+    content: str
 
 
-@app.post("/api/retrieval/")
-async def retrieval(request: RetrievalQuery):
-    """
-    Retrieve relevant documents from MongoDB using vector similarity search
-    
-    Args:
-        request: RetrievalQuery object containing:
-            - query: The search query string
-            - top_k: Number of top results to return (default: 3)
-    
-    Returns:
-        JSON response with retrieved documents and similarity scores
-    """
-    try:
-        # Validate top_k
-        if request.top_k and (request.top_k < 1 or request.top_k > 20):
-            raise HTTPException(
-                status_code=400, 
-                detail="top_k must be between 1 and 20"
-            )
-        
-        # Retrieve documents
-        results = retrieve_documents(request.query, top_k=request.top_k or 3)
-        
-        if not results:
-            return {
-                "status": "success",
-                "query": request.query,
-                "results_count": 0,
-                "results": [],
-                "message": "No relevant documents found."
-            }
-        
-        # Format results for JSON response
-        formatted_results = []
-        for result in results:
-            formatted_results.append({
-                "document_id": result["document_id"],
-                "filename": result["filename"],
-                "chunk_index": result["chunk_index"],
-                "text": result["text"],
-                "similarity": round(result["similarity"], 4),
-                "created_at": result.get("created_at").isoformat() if result.get("created_at") else None,
-                "metadata": result.get("metadata", {})
-            })
-        
-        return {
-            "status": "success",
-            "query": request.query,
-            "results_count": len(formatted_results),
-            "results": formatted_results
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error retrieving documents: {str(e)}"
-        )
+class ChatRequest(BaseModel):
+    """Request model for chat endpoint"""
+    message: str
+    conversation_history: Optional[List[Message]] = []
 
 
-@app.get("/api/retrieval/")
-async def retrieval_get(
-    query: str = Query(..., description="The search query string"),
-    top_k: Optional[int] = Query(3, ge=1, le=20, description="Number of top results to return")
-):
-    """
-    Retrieve relevant documents from MongoDB using vector similarity search (GET method)
-    
-    Args:
-        query: The search query string (required)
-        top_k: Number of top results to return (default: 3, max: 20)
-    
-    Returns:
-        JSON response with retrieved documents and similarity scores
-    """
-    try:
-        # Retrieve documents
-        results = retrieve_documents(query, top_k=top_k)
-        
-        if not results:
-            return {
-                "status": "success",
-                "query": query,
-                "results_count": 0,
-                "results": [],
-                "message": "No relevant documents found."
-            }
-        
-        # Format results for JSON response
-        formatted_results = []
-        for result in results:
-            formatted_results.append({
-                "document_id": result["document_id"],
-                "filename": result["filename"],
-                "chunk_index": result["chunk_index"],
-                "text": result["text"],
-                "similarity": round(result["similarity"], 4),
-                "created_at": result.get("created_at").isoformat() if result.get("created_at") else None,
-                "metadata": result.get("metadata", {})
-            })
-        
-        return {
-            "status": "success",
-            "query": query,
-            "results_count": len(formatted_results),
-            "results": formatted_results
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error retrieving documents: {str(e)}"
-        )
-
+class ChatResponse(BaseModel):
+    """Response model for chat endpoint"""
+    response: str
 
 @app.post("/api/embed-pdf/")
 async def embed_pdf(file: UploadFile = File(...)):
@@ -246,3 +141,89 @@ async def embed_pdf(file: UploadFile = File(...)):
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+
+
+def retrieve_context(query: str, k: int = 4) -> str:
+    """
+    Retrieve relevant context from vector store and format it as a string
+    
+    Args:
+        query: The search query string
+        k: Number of top results to return
+    
+    Returns:
+        Formatted string with relevant context from documents
+    """
+    results = retrieve_documents(query, top_k=k)
+    
+    if not results:
+        return "No relevant context found in the knowledge base."
+    
+    context_parts = []
+    for i, result in enumerate(results, 1):
+        context_parts.append(
+            f"[Document {i} from {result['filename']}]\n"
+            f"{result['text']}\n"
+        )
+    
+    return "\n".join(context_parts)
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Chat endpoint that uses Claude agent with RAG (Retrieval Augmented Generation)
+    
+    Args:
+        request: ChatRequest containing:
+            - message: The user's message
+            - conversation_history: Optional list of previous messages
+    
+    Returns:
+        ChatResponse with the agent's response
+    """
+    try:
+        user_message = request.message
+        conversation_history = request.conversation_history or []
+
+        # Step 1: Retrieve relevant context from vector store
+        context = retrieve_context(user_message, k=4)
+        
+        # Step 2: Build the prompt with context
+        # System message that instructs the agent to use the retrieved context
+        system_prompt = """You are a helpful assistant that answers questions based on the provided context from a knowledge base.
+
+When answering:
+- Use the retrieved context to provide accurate, detailed answers
+- If the context contains relevant information, cite it in your response
+- If the context doesn't contain enough information to answer the question, say so
+- You can also use your general knowledge, but prioritize the provided context
+- Be concise but thorough"""
+        
+        messages = [SystemMessage(content=system_prompt)]
+        
+        # Add conversation history
+        for msg in conversation_history:
+            if msg.role == "user":
+                messages.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                messages.append(AIMessage(content=msg.content))
+        
+        # Add current user message with context
+        user_prompt = f"""Context from knowledge base:
+            {context}
+
+            User question: {user_message}
+
+            Please answer the user's question using the context above when available."""
+        
+        messages.append(HumanMessage(content=user_prompt))
+        
+        # Step 3: Get response from LLM (the "agent")
+        response = llm.invoke(messages)
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        return ChatResponse(response=response_text)
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
