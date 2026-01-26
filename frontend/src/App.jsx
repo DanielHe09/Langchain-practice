@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from './contexts/AuthContext'
+import { authenticatedFetch } from './utils/api'
 import Login from './components/Login'
 import SignUp from './components/SignUp'
 import './App.css'
@@ -78,11 +79,8 @@ function Chatbot({ signOut }) {
           content: msg.content
         }))
 
-      const response = await fetch(`${API_URL}/chat`, {
+      const response = await authenticatedFetch(`${API_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           message: message,
           conversation_history: conversationHistory

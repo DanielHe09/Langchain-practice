@@ -18,19 +18,52 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
       setLoading(false)
+      
+      // Store token in chrome.storage for background script access
+      if (session?.access_token) {
+        try {
+          await chrome.storage.local.set({ 
+            supabase_token: session.access_token,
+            supabase_user_id: session.user.id
+          })
+        } catch (error) {
+          // Ignore errors in non-extension contexts
+          console.log('Could not store token in chrome.storage:', error)
+        }
+      }
     })
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
       setLoading(false)
+      
+      // Store token in chrome.storage for background script access
+      if (session?.access_token) {
+        try {
+          await chrome.storage.local.set({ 
+            supabase_token: session.access_token,
+            supabase_user_id: session.user.id
+          })
+        } catch (error) {
+          // Ignore errors in non-extension contexts
+          console.log('Could not store token in chrome.storage:', error)
+        }
+      } else {
+        // Clear token on logout
+        try {
+          await chrome.storage.local.remove(['supabase_token', 'supabase_user_id'])
+        } catch (error) {
+          // Ignore errors in non-extension contexts
+        }
+      }
     })
 
     return () => subscription.unsubscribe()

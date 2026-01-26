@@ -36,13 +36,14 @@ def cosine_similarity(vec1, vec2):
     return dot_product / (norm1 * norm2)
 
 
-def retrieve_documents(query: str, top_k: int = 3) -> list:
+def retrieve_documents(query: str, top_k: int = 3, supabase_token: str = None) -> list:
     """
     Retrieve relevant documents from MongoDB using vector similarity search
     
     Args:
         query: The search query string
         top_k: Number of top results to return (default: 3)
+        supabase_token: Optional Supabase token to filter documents by user
     
     Returns:
         List of dictionaries containing document information and similarity scores
@@ -59,8 +60,17 @@ def retrieve_documents(query: str, top_k: int = 3) -> list:
         # Get embeddings collection
         embeddings_collection = get_embeddings_collection()
         
-        # Retrieve all documents (or use MongoDB vector search if index is set up)
-        all_documents = list(embeddings_collection.find({}))
+        # Build query filter - only get documents for this user if token is provided
+        query_filter = {}
+        if supabase_token:
+            query_filter['supabase_token'] = supabase_token
+        
+        # Retrieve documents matching the filter
+        all_documents = list(embeddings_collection.find(query_filter))
+        
+        if not all_documents:
+            print(f"No documents found for user (token: {supabase_token[:20] if supabase_token else 'None'}...)")
+            return []
         
         # Calculate similarity scores
         scored_documents = []

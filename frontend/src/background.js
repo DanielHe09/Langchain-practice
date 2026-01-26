@@ -3,6 +3,17 @@ console.log('Background script loaded!');
 let previousActiveTabId = null;
 const API_URL = 'http://localhost:8000';
 
+// Function to get token from chrome.storage
+async function getStoredToken() {
+  try {
+    const result = await chrome.storage.local.get(['supabase_token']);
+    return result.supabase_token || null;
+  } catch (error) {
+    console.error('Error getting token from storage:', error);
+    return null;
+  }
+}
+
 // Function to send screenshot to backend
 async function sendScreenshotToBackend(dataUrl, url, title) {
   try {
@@ -12,11 +23,21 @@ async function sendScreenshotToBackend(dataUrl, url, title) {
     // Create ISO timestamp
     const capturedAt = new Date().toISOString();
     
+    // Get JWT token from storage
+    const token = await getStoredToken();
+    
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    
+    // Add Authorization header if token exists
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const response = await fetch(`${API_URL}/api/embed-screenshot/`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: JSON.stringify({
         source_url: url,
         captured_at: capturedAt,

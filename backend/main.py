@@ -1,7 +1,7 @@
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pypdf import PdfReader
+from typing import Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import google.generativeai as genai
 from mongo_client import get_embeddings_collection
@@ -9,7 +9,6 @@ from langchain_agent import retrieve_documents, llm
 from datetime import datetime
 import uuid
 from dotenv import load_dotenv
-from io import BytesIO
 from pydantic import BaseModel
 from typing import Optional, List
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -68,6 +67,7 @@ class ChatResponse(BaseModel):
 
 class ScreenshotRequest(BaseModel):
     """Request model for screenshot embedding"""
+    supabase_token: str
     source_url: str
     captured_at: str  # ISO string
     title: Optional[str] = None
@@ -161,6 +161,7 @@ async def embed_screenshot(request: ScreenshotRequest):
             
             # Prepare document for MongoDB with specified fields
             doc = {
+                "supabase_token": request.supabase_token,
                 "document_id": document_id,
                 "source_type": "web_screenshot",
                 "source_url": request.source_url,
@@ -213,99 +214,19 @@ async def embed_screenshot(request: ScreenshotRequest):
         raise HTTPException(status_code=500, detail=f"Error processing screenshot: {str(e)}")
 
 
-@app.post("/api/embed-pdf/")
-async def embed_pdf(file: UploadFile = File(...)):
-    """
-    Upload a PDF file, extract text, create embeddings, and store in MongoDB
-    """
-    # Validate file type
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
-    
-    try:
-        # Read PDF file
-        contents = await file.read()
-        
-        # Extract text from PDF
-        pdf_reader = PdfReader(BytesIO(contents))
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        
-        if not text.strip():
-            raise HTTPException(status_code=400, detail="No text found in PDF")
-        
-        # Initialize Google Generative AI
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        
-        # Split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-        )
-        chunks = text_splitter.split_text(text)
-        
-        # Create embeddings for each chunk
-        embeddings_collection = get_embeddings_collection()
-        document_id = str(uuid.uuid4())
-        
-        documents_to_insert = []
-        for i, chunk in enumerate(chunks):
-            # Generate embedding using Google's embedding model
-            result = genai.embed_content(
-                model="models/embedding-001",
-                content=chunk,
-                task_type="retrieval_document"
-            )
-            embedding = result['embedding']
-            
-            # Prepare document for MongoDB
-            doc = {
-                "document_id": document_id,
-                "filename": file.filename,
-                "chunk_index": i,
-                "text": chunk,
-                "embedding": embedding,
-                "created_at": datetime.utcnow(),
-                "metadata": {
-                    "total_chunks": len(chunks),
-                    "file_size": len(contents)
-                }
-            }
-            documents_to_insert.append(doc)
-        
-        # Insert all documents into MongoDB
-        if documents_to_insert:
-            result = embeddings_collection.insert_many(documents_to_insert)
-            
-            return {
-                "status": "success",
-                "message": f"PDF embedded and stored successfully",
-                "document_id": document_id,
-                "filename": file.filename,
-                "chunks_created": len(documents_to_insert),
-                "inserted_ids": len(result.inserted_ids)
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to create embeddings")
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
-
-
-def retrieve_context(query: str, k: int = 4) -> str:
+def retrieve_context(query: str, k: int = 4, supabase_token: str = None) -> str:
     """
     Retrieve relevant context from vector store and format it as a string
     
     Args:
         query: The search query string
         k: Number of top results to return
+        supabase_token: Optional Supabase token to filter documents by user
     
     Returns:
         Formatted string with relevant context from documents
     """
-    results = retrieve_documents(query, top_k=k)
+    results = retrieve_documents(query, top_k=k, supabase_token=supabase_token)
     
     if not results:
         return "No relevant context found in the knowledge base."
@@ -321,7 +242,10 @@ def retrieve_context(query: str, k: int = 4) -> str:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    authorization: Optional[str] = Header(None)
+):
     """
     Chat endpoint that uses Claude agent with RAG (Retrieval Augmented Generation)
     
@@ -329,6 +253,7 @@ async def chat(request: ChatRequest):
         request: ChatRequest containing:
             - message: The user's message
             - conversation_history: Optional list of previous messages
+        authorization: Authorization header containing Bearer token
     
     Returns:
         ChatResponse with the agent's response
@@ -337,8 +262,15 @@ async def chat(request: ChatRequest):
         user_message = request.message
         conversation_history = request.conversation_history or []
 
-        # Step 1: Retrieve relevant context from vector store
-        context = retrieve_context(user_message, k=4)
+        # Extract token from Authorization header
+        supabase_token = None
+        if authorization and authorization.startswith("Bearer "):
+            supabase_token = authorization.split(" ")[1]
+        
+        print(f"🔐 DEBUG: Chat request - Token present: {bool(supabase_token)}")
+
+        # Step 1: Retrieve relevant context from vector store (filtered by user token)
+        context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
         
         # Step 2: Build the prompt with context
         # System message that instructs the agent to use the retrieved context
