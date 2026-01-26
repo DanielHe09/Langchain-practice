@@ -25,6 +25,7 @@ async function sendScreenshotToBackend(dataUrl, url, title) {
     
     // Get JWT token from storage
     const token = await getStoredToken();
+    console.log('🔑 Token retrieved for screenshot:', token ? 'Present' : 'Missing');
     
     const headers = {
       'Content-Type': 'application/json',
@@ -33,6 +34,8 @@ async function sendScreenshotToBackend(dataUrl, url, title) {
     // Add Authorization header if token exists
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      console.warn('⚠️ No token found - screenshot will be sent without authentication');
     }
     
     const response = await fetch(`${API_URL}/api/embed-screenshot/`, {
@@ -47,8 +50,14 @@ async function sendScreenshotToBackend(dataUrl, url, title) {
     });
     
     if (!response.ok) {
-      const error = await response.json();
-      console.error('Error sending screenshot to backend:', error);
+      let errorMessage = 'Unknown error';
+      try {
+        const error = await response.json();
+        errorMessage = error.detail || error.message || JSON.stringify(error);
+      } catch (e) {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      console.error('Error sending screenshot to backend:', errorMessage);
       return;
     }
     
@@ -101,20 +110,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
           
           console.log('Screenshot captured for tab:', tabId, tab.url);
           
-          // Store screenshot data in chrome.storage.local
-          await chrome.storage.local.set({
-            [`screenshot_${tabId}`]: {
-              dataUrl: dataUrl,
-              url: tab.url,
-              title: tab.title,
-              timestamp: Date.now(),
-              tabId: tabId
-            }
-          });
-          
-          console.log('Screenshot stored for tab:', tabId);
-          
-          // Send screenshot to backend for embedding
+          // Send screenshot to backend for embedding (don't store in chrome.storage to avoid quota issues)
           await sendScreenshotToBackend(dataUrl, tab.url, tab.title);
         } catch (error) {
           // Silently ignore errors for URLs we can't access
@@ -162,19 +158,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           
           console.log('Screenshot captured for loaded tab:', tabId, tab.url);
           
-          await chrome.storage.local.set({
-            [`screenshot_${tabId}`]: {
-              dataUrl: dataUrl,
-              url: tab.url,
-              title: tab.title,
-              timestamp: Date.now(),
-              tabId: tabId
-            }
-          });
-          
-          console.log('Screenshot stored for loaded tab:', tabId);
-          
-          // Send screenshot to backend for embedding
+          // Send screenshot to backend for embedding (don't store in chrome.storage to avoid quota issues)
           await sendScreenshotToBackend(dataUrl, tab.url, tab.title);
         } catch (error) {
           // Silently ignore errors for URLs we can't access

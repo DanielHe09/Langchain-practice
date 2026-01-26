@@ -67,7 +67,6 @@ class ChatResponse(BaseModel):
 
 class ScreenshotRequest(BaseModel):
     """Request model for screenshot embedding"""
-    supabase_token: str
     source_url: str
     captured_at: str  # ISO string
     title: Optional[str] = None
@@ -105,17 +104,26 @@ def extract_text_from_url(url: str) -> str:
 
 
 @app.post("/api/embed-screenshot/")
-async def embed_screenshot(request: ScreenshotRequest):
+async def embed_screenshot(
+    request: ScreenshotRequest,
+    authorization: Optional[str] = Header(None)
+):
     """
     Receive screenshot data, extract text, create embeddings, and store in MongoDB
     """
     try:
+        # Extract token from Authorization header
+        supabase_token = None
+        if authorization and authorization.startswith("Bearer "):
+            supabase_token = authorization.split(" ")[1]
+        
         print(f"\n{'='*60}")
         print(f"📸 DEBUG: Screenshot received!")
         print(f"   URL: {request.source_url}")
         print(f"   Title: {request.title}")
         print(f"   Captured at: {request.captured_at}")
         print(f"   Screenshot data size: {len(request.screenshot_data) if request.screenshot_data else 0} bytes")
+        print(f"   Token present: {bool(supabase_token)}")
         print(f"{'='*60}\n")
         
         # Extract text from the webpage URL (more reliable than OCR for text content)
@@ -161,7 +169,7 @@ async def embed_screenshot(request: ScreenshotRequest):
             
             # Prepare document for MongoDB with specified fields
             doc = {
-                "supabase_token": request.supabase_token,
+                "supabase_token": supabase_token,
                 "document_id": document_id,
                 "source_type": "web_screenshot",
                 "source_url": request.source_url,

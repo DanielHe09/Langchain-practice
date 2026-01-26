@@ -30,6 +30,7 @@ export const AuthProvider = ({ children }) => {
             supabase_token: session.access_token,
             supabase_user_id: session.user.id
           })
+          console.log('✅ Initial token stored in chrome.storage for user:', session.user.id)
         } catch (error) {
           // Ignore errors in non-extension contexts
           console.log('Could not store token in chrome.storage:', error)
@@ -52,6 +53,7 @@ export const AuthProvider = ({ children }) => {
             supabase_token: session.access_token,
             supabase_user_id: session.user.id
           })
+          console.log('✅ Token stored in chrome.storage for user:', session.user.id)
         } catch (error) {
           // Ignore errors in non-extension contexts
           console.log('Could not store token in chrome.storage:', error)
@@ -60,8 +62,10 @@ export const AuthProvider = ({ children }) => {
         // Clear token on logout
         try {
           await chrome.storage.local.remove(['supabase_token', 'supabase_user_id'])
+          console.log('🗑️ Token cleared from chrome.storage on logout')
         } catch (error) {
           // Ignore errors in non-extension contexts
+          console.log('Could not clear token from chrome.storage:', error)
         }
       }
     })
