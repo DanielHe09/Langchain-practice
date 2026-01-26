@@ -1,9 +1,43 @@
 import { useState, useRef, useEffect } from 'react'
+import { useAuth } from './contexts/AuthContext'
+import Login from './components/Login'
+import SignUp from './components/SignUp'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
 
 function App() {
+  const { user, loading, signOut } = useAuth()
+  const [showSignUp, setShowSignUp] = useState(false)
+
+  // Show loading state while checking auth
+  if (loading) {
+    return (
+      <div className="app">
+        <div className="container">
+          <div className="loading-container">
+            <div className="spinner"></div>
+            <p>Loading...</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Show auth pages if not logged in
+  if (!user) {
+    return showSignUp ? (
+      <SignUp onSwitchToLogin={() => setShowSignUp(false)} />
+    ) : (
+      <Login onSwitchToSignUp={() => setShowSignUp(true)} />
+    )
+  }
+
+  // Show chatbot if logged in
+  return <Chatbot signOut={signOut} />
+}
+
+function Chatbot({ signOut }) {
   const [messages, setMessages] = useState([
     { role: 'assistant', content: 'Hello! How can I help you today?' }
   ])
@@ -82,11 +116,18 @@ function App() {
     }
   }
 
+  const handleSignOut = async () => {
+    await signOut()
+  }
+
   return (
     <div className="app">
       <div className="container">
         <div className="header">
           <h2>🤖 Chatbot</h2>
+          <button onClick={handleSignOut} className="logout-button">
+            Sign out
+          </button>
         </div>
         
         <div className="messages" id="messages">
