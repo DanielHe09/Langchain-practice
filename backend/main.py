@@ -306,6 +306,8 @@ When answering:
 
             User question: {user_message}
 
+            The current time of the user request is: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
             Please answer the user's question using the context above when available."""
         
         messages.append(HumanMessage(content=user_prompt))
