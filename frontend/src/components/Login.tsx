@@ -1,15 +1,19 @@
-import { useState } from 'react'
+import { useState, FormEvent } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import './Auth.css'
 
-export default function Login({ onSwitchToSignUp }) {
+interface LoginProps {
+  onSwitchToSignUp: () => void
+}
+
+export default function Login({ onSwitchToSignUp }: LoginProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { signIn } = useAuth()
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -17,7 +21,7 @@ export default function Login({ onSwitchToSignUp }) {
     try {
       const { error } = await signIn(email, password)
       if (error) throw error
-    } catch (err) {
+    } catch (err: any) {
       setError(err.message || 'Failed to sign in')
     } finally {
       setLoading(false)

@@ -14,11 +14,7 @@ export default defineConfig({
           resolve(__dirname, 'dist/manifest.json')
         )
         
-        // Copy background script
-        copyFileSync(
-          resolve(__dirname, 'src/background.js'),
-          resolve(__dirname, 'dist/background.js')
-        )
+        // Background script is compiled by Vite as part of the build
         
         // Fix paths in popup.html to be relative for Chrome extension
         const htmlPath = resolve(__dirname, 'dist/popup.html')
@@ -37,7 +33,13 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'popup.html')
+        popup: resolve(__dirname, 'popup.html'),
+        background: resolve(__dirname, 'src/background.ts')
+      },
+      output: {
+        entryFileNames: (chunkInfo) => {
+          return chunkInfo.name === 'background' ? 'background.js' : 'assets/[name]-[hash].js'
+        }
       }
     }
   }

@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { useState, FormEvent } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import './Auth.css'
 
-export default function SignUp({ onSwitchToLogin }) {
+interface SignUpProps {
+  onSwitchToLogin: () => void
+}
+
+export default function SignUp({ onSwitchToLogin }: SignUpProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -11,7 +15,7 @@ export default function SignUp({ onSwitchToLogin }) {
   const [success, setSuccess] = useState(false)
   const { signUp } = useAuth()
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
     setSuccess(false)
@@ -33,7 +37,7 @@ export default function SignUp({ onSwitchToLogin }) {
       if (error) throw error
       setSuccess(true)
       setError('')
-    } catch (err) {
+    } catch (err: any) {
       setError(err.message || 'Failed to sign up')
     } finally {
       setLoading(false)

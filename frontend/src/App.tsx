@@ -3,6 +3,7 @@ import { useAuth } from './contexts/AuthContext'
 import { authenticatedFetch } from './utils/api'
 import Login from './components/Login'
 import SignUp from './components/SignUp'
+import { Message } from './types'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
@@ -38,14 +39,18 @@ function App() {
   return <Chatbot signOut={signOut} />
 }
 
-function Chatbot({ signOut }) {
-  const [messages, setMessages] = useState([
+interface ChatbotProps {
+  signOut: () => Promise<{ error: any }>
+}
+
+function Chatbot({ signOut }: ChatbotProps) {
+  const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: 'Hello! How can I help you today?' }
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const messagesEndRef = useRef(null)
-  const inputRef = useRef(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -67,12 +72,12 @@ function Chatbot({ signOut }) {
     setLoading(true)
 
     // Add user message
-    const newUserMessage = { role: 'user', content: message }
+    const newUserMessage: Message = { role: 'user', content: message }
     setMessages(prev => [...prev, newUserMessage])
 
     try {
       // Prepare conversation history (excluding the welcome message)
-      const conversationHistory = messages
+      const conversationHistory: Message[] = messages
         .filter(msg => msg.role !== 'assistant' || msg.content !== 'Hello! How can I help you today?')
         .map(msg => ({
           role: msg.role,
@@ -95,7 +100,7 @@ function Chatbot({ signOut }) {
       
       // Add assistant response
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error:', error)
       setMessages(prev => [...prev, { 
         role: 'assistant', 
@@ -107,7 +112,7 @@ function Chatbot({ signOut }) {
     }
   }
 
-  const handleKeyPress = (e) => {
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       sendMessage()

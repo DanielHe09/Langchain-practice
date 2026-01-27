@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 /**
  * Get the current JWT access token from Supabase
  */
-export async function getAccessToken() {
+export async function getAccessToken(): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession()
   return session?.access_token || null
 }
@@ -12,12 +12,15 @@ export async function getAccessToken() {
  * Make an authenticated API call to the backend
  * Automatically includes the JWT token in the Authorization header
  */
-export async function authenticatedFetch(url, options = {}) {
+export async function authenticatedFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
   const token = await getAccessToken()
   
-  const headers = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   }
   
   // Add Authorization header if token exists
