@@ -15,6 +15,9 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import base64
 import httpx
 from bs4 import BeautifulSoup
+from enum import Enum
+import json
+import re
 
 load_dotenv()
 
@@ -60,9 +63,16 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[Message]] = []
 
 
+class ActionType(str, Enum):
+    """Action types for chat responses"""
+    CHAT_ONLY = "chat_only"
+    OPEN_TAB = "open_tab"
+
+
 class ChatResponse(BaseModel):
     """Response model for chat endpoint"""
-    response: str
+    action: ActionType
+    msg: str
 
 
 class ScreenshotRequest(BaseModel):
@@ -161,7 +171,7 @@ async def embed_screenshot(
         for i, chunk in enumerate(chunks):
             # Generate embedding using Google's embedding model
             result = genai.embed_content(
-                model="models/embedding-001",
+                model="models/gemini-embedding-001",
                 content=chunk,
                 task_type="retrieval_document"
             )
@@ -281,15 +291,26 @@ async def chat(
         context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
         
         # Step 2: Build the prompt with context
-        # System message that instructs the agent to use the retrieved context
+        # System message that instructs the agent to use the retrieved context and return structured output
         system_prompt = """You are a helpful assistant that answers questions based on the provided context from a knowledge base.
+
+When responding, you MUST return your response in the following JSON format:
+{
+  "action": "chat_only" or "open_tab",
+  "msg": "your response message here"
+}
+
+Action rules:
+- Use "open_tab" if the user's query requires opening a new browser tab or webpage (e.g., "open YouTube", "search for Python tutorials", "go to github.com")
+- Use "chat_only" for all other queries (answering questions, explanations, general conversation)
 
 When answering:
 - Use the retrieved context to provide accurate, detailed answers
 - If the context contains relevant information, cite it in your response
 - If the context doesn't contain enough information to answer the question, say so
 - You can also use your general knowledge, but prioritize the provided context
-- Be concise but thorough"""
+- Be concise but thorough
+- Always return valid JSON with both "action" and "msg" fields"""
         
         messages = [SystemMessage(content=system_prompt)]
         
@@ -316,7 +337,42 @@ When answering:
         response = llm.invoke(messages)
         response_text = response.content if hasattr(response, 'content') else str(response)
         
-        return ChatResponse(response=response_text)
+        # Step 4: Parse structured response from LLM
+        # Try to extract JSON from the response
+        action = ActionType.CHAT_ONLY  # Default action
+        msg = response_text  # Default message
+        
+        try:
+            # Try to find JSON in the response (handles cases where LLM adds extra text)
+            json_match = re.search(r'\{[^{}]*"action"[^{}]*"msg"[^{}]*\}', response_text, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                action_str = parsed.get("action", "chat_only").lower()
+                msg = parsed.get("msg", response_text)
+                
+                # Validate and set action
+                if action_str == "open_tab":
+                    action = ActionType.OPEN_TAB
+                else:
+                    action = ActionType.CHAT_ONLY
+            else:
+                # If no JSON found, try parsing the entire response as JSON
+                parsed = json.loads(response_text)
+                action_str = parsed.get("action", "chat_only").lower()
+                msg = parsed.get("msg", response_text)
+                
+                if action_str == "open_tab":
+                    action = ActionType.OPEN_TAB
+                else:
+                    action = ActionType.CHAT_ONLY
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            # If JSON parsing fails, use the raw response as message with default action
+            print(f"⚠️ DEBUG: Failed to parse structured response, using default: {str(e)}")
+            print(f"   Raw response: {response_text[:200]}...")
+            msg = response_text
+            action = ActionType.CHAT_ONLY
+        
+        return ChatResponse(action=action, msg=msg)
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

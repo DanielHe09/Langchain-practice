@@ -51,7 +51,7 @@ def retrieve_documents(query: str, top_k: int = 3, supabase_token: str = None) -
     try:
         # Generate embedding for the query
         result = genai.embed_content(
-            model="models/embedding-001",
+            model="models/gemini-embedding-001",
             content=query,
             task_type="retrieval_query"
         )
