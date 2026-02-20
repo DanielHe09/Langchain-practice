@@ -4,6 +4,7 @@ import { authenticatedFetch } from './utils/api'
 import Login from './components/Login'
 import SignUp from './components/SignUp'
 import { Message } from './types'
+import { openTabFromMessage } from './Tools'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
@@ -97,9 +98,12 @@ function Chatbot({ signOut }: ChatbotProps) {
       }
 
       const data = await response.json()
-      
-      // Add assistant response
-      setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
+      // ChatResponse: { action: 'chat_only' | 'open_tab', msg: string }
+      const content = data.msg ?? data.response ?? ''
+      setMessages(prev => [...prev, { role: 'assistant', content }])
+      if (data.action === 'open_tab') {
+        openTabFromMessage(content)
+      }
     } catch (error: any) {
       console.error('Error:', error)
       setMessages(prev => [...prev, { 

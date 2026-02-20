@@ -1,5 +1,6 @@
+import asyncio
 import os
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -113,123 +114,105 @@ def extract_text_from_url(url: str) -> str:
         return ""
 
 
+def _run_embedding_sync(
+    text: str,
+    supabase_token: Optional[str],
+    source_url: str,
+    captured_at: str,
+    title: Optional[str],
+    screenshot_data: str,
+) -> None:
+    """
+    Synchronous embedding work (chunking, API calls, MongoDB insert).
+    Run in a thread so the main worker stays free for chat and other requests.
+    """
+    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len,
+    )
+    chunks = text_splitter.split_text(text)
+    embeddings_collection = get_embeddings_collection()
+    document_id = str(uuid.uuid4())
+    documents_to_insert = []
+    for i, chunk in enumerate(chunks):
+        result = genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=chunk,
+            task_type="retrieval_document"
+        )
+        embedding = result['embedding']
+        doc = {
+            "supabase_token": supabase_token,
+            "document_id": document_id,
+            "source_type": "web_screenshot",
+            "source_url": source_url,
+            "captured_at": captured_at,
+            "title": title,
+            "filename": source_url,
+            "chunk_index": i,
+            "text": chunk,
+            "embedding": embedding,
+            "created_at": datetime.utcnow(),
+            "metadata": {
+                "total_chunks": len(chunks),
+                "has_screenshot": True,
+                "screenshot_size": len(screenshot_data) if screenshot_data else 0
+            }
+        }
+        documents_to_insert.append(doc)
+        if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
+            print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
+    if documents_to_insert:
+        result = embeddings_collection.insert_many(documents_to_insert)
+        print(f"\n✅ DEBUG: Screenshot stored in MongoDB: document_id={document_id}, chunks={len(documents_to_insert)}\n")
+    else:
+        print(f"❌ DEBUG: No documents to insert for {source_url}\n")
+
+
 @app.post("/api/embed-screenshot/")
 async def embed_screenshot(
     request: ScreenshotRequest,
+    background_tasks: BackgroundTasks,
     authorization: Optional[str] = Header(None)
 ):
     """
-    Receive screenshot data, extract text, create embeddings, and store in MongoDB
+    Accept screenshot, extract text, then process embeddings in the background.
+    Returns immediately so chat and other requests are not blocked.
     """
-    try:
-        # Extract token from Authorization header
-        supabase_token = None
-        if authorization and authorization.startswith("Bearer "):
-            supabase_token = authorization.split(" ")[1]
-        
-        print(f"\n{'='*60}")
-        print(f"📸 DEBUG: Screenshot received!")
-        print(f"   URL: {request.source_url}")
-        print(f"   Title: {request.title}")
-        print(f"   Captured at: {request.captured_at}")
-        print(f"   Screenshot data size: {len(request.screenshot_data) if request.screenshot_data else 0} bytes")
-        print(f"   Token present: {bool(supabase_token)}")
-        print(f"{'='*60}\n")
-        
-        # Extract text from the webpage URL (more reliable than OCR for text content)
-        print(f"🔍 DEBUG: Extracting text from URL: {request.source_url}")
-        text = extract_text_from_url(request.source_url)
-        print(f"   Extracted text length: {len(text)} characters")
-        
-        if not text.strip():
-            # If no text extracted, return a message (could add OCR fallback here)
-            print(f"❌ DEBUG: No text extracted from URL")
-            raise HTTPException(
-                status_code=400, 
-                detail="Could not extract text from webpage. The page might require JavaScript or be inaccessible."
-            )
-        
-        # Initialize Google Generative AI
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        
-        # Split text into chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
+    supabase_token = None
+    if authorization and authorization.startswith("Bearer "):
+        supabase_token = authorization.split(" ")[1]
+
+    print(f"\n📸 Screenshot received: {request.source_url} (token present: {bool(supabase_token)})\n")
+
+    text = extract_text_from_url(request.source_url)
+    if not text.strip():
+        print(f"❌ No text extracted from URL: {request.source_url}")
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from webpage. The page might require JavaScript or be inaccessible."
         )
-        chunks = text_splitter.split_text(text)
-        print(f"📝 DEBUG: Split text into {len(chunks)} chunks")
-        
-        # Create embeddings for each chunk
-        embeddings_collection = get_embeddings_collection()
-        document_id = str(uuid.uuid4())
-        print(f"🆔 DEBUG: Generated document_id: {document_id}")
-        
-        documents_to_insert = []
-        print(f"🔢 DEBUG: Creating embeddings for {len(chunks)} chunks...")
-        for i, chunk in enumerate(chunks):
-            # Generate embedding using Google's embedding model
-            result = genai.embed_content(
-                model="models/gemini-embedding-001",
-                content=chunk,
-                task_type="retrieval_document"
-            )
-            embedding = result['embedding']
-            
-            # Prepare document for MongoDB with specified fields
-            doc = {
-                "supabase_token": supabase_token,
-                "document_id": document_id,
-                "source_type": "web_screenshot",
-                "source_url": request.source_url,
-                "captured_at": request.captured_at,
-                "title": request.title,
-                "filename": request.source_url,  # Use URL as filename for compatibility
-                "chunk_index": i,
-                "text": chunk,
-                "embedding": embedding,
-                "created_at": datetime.utcnow(),
-                "metadata": {
-                    "total_chunks": len(chunks),
-                    "has_screenshot": True,
-                    "screenshot_size": len(request.screenshot_data) if request.screenshot_data else 0
-                }
-            }
-            documents_to_insert.append(doc)
-            if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-                print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
-        
-        # Insert all documents into MongoDB
-        if documents_to_insert:
-            print(f"\n💾 DEBUG: Inserting {len(documents_to_insert)} documents into MongoDB...")
-            result = embeddings_collection.insert_many(documents_to_insert)
-            print(f"   ✓ Successfully inserted {len(result.inserted_ids)} documents")
-            print(f"   ✓ Document IDs: {result.inserted_ids[:3]}..." if len(result.inserted_ids) > 3 else f"   ✓ Document IDs: {result.inserted_ids}")
-            print(f"\n✅ DEBUG: Screenshot successfully stored in MongoDB!")
-            print(f"   Document ID: {document_id}")
-            print(f"   Source URL: {request.source_url}")
-            print(f"   Total chunks: {len(documents_to_insert)}")
-            print(f"{'='*60}\n")
-            
-            return {
-                "status": "success",
-                "message": f"Screenshot embedded and stored successfully",
-                "document_id": document_id,
-                "source_url": request.source_url,
-                "chunks_created": len(documents_to_insert),
-                "inserted_ids": len(result.inserted_ids)
-            }
-        else:
-            print(f"❌ DEBUG: No documents to insert!")
-            raise HTTPException(status_code=500, detail="Failed to create embeddings")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"\n❌ DEBUG: Error processing screenshot: {str(e)}")
-        print(f"{'='*60}\n")
-        raise HTTPException(status_code=500, detail=f"Error processing screenshot: {str(e)}")
+
+    print(f"   Extracted {len(text)} chars; queuing embedding work in background.\n")
+
+    background_tasks.add_task(
+        asyncio.to_thread,
+        _run_embedding_sync,
+        text,
+        supabase_token,
+        request.source_url,
+        request.captured_at,
+        request.title,
+        request.screenshot_data or "",
+    )
+
+    return {
+        "status": "accepted",
+        "message": "Screenshot accepted; embeddings are being created in the background.",
+        "source_url": request.source_url,
+    }
 
 
 def retrieve_context(query: str, k: int = 4, supabase_token: str = None) -> str:
