@@ -126,49 +126,52 @@ def _run_embedding_sync(
     Synchronous embedding work (chunking, API calls, MongoDB insert).
     Run in a thread so the main worker stays free for chat and other requests.
     """
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len,
-    )
-    chunks = text_splitter.split_text(text)
-    embeddings_collection = get_embeddings_collection()
-    document_id = str(uuid.uuid4())
-    documents_to_insert = []
-    for i, chunk in enumerate(chunks):
-        result = genai.embed_content(
-            model="models/gemini-embedding-001",
-            content=chunk,
-            task_type="retrieval_document"
+    try:
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
         )
-        embedding = result['embedding']
-        doc = {
-            "supabase_token": supabase_token,
-            "document_id": document_id,
-            "source_type": "web_screenshot",
-            "source_url": source_url,
-            "captured_at": captured_at,
-            "title": title,
-            "filename": source_url,
-            "chunk_index": i,
-            "text": chunk,
-            "embedding": embedding,
-            "created_at": datetime.utcnow(),
-            "metadata": {
-                "total_chunks": len(chunks),
-                "has_screenshot": True,
-                "screenshot_size": len(screenshot_data) if screenshot_data else 0
+        chunks = text_splitter.split_text(text)
+        embeddings_collection = get_embeddings_collection()
+        document_id = str(uuid.uuid4())
+        documents_to_insert = []
+        for i, chunk in enumerate(chunks):
+            result = genai.embed_content(
+                model="models/gemini-embedding-001",
+                content=chunk,
+                task_type="retrieval_document"
+            )
+            embedding = result['embedding']
+            doc = {
+                "supabase_token": supabase_token,
+                "document_id": document_id,
+                "source_type": "web_screenshot",
+                "source_url": source_url,
+                "captured_at": captured_at,
+                "title": title,
+                "filename": source_url,
+                "chunk_index": i,
+                "text": chunk,
+                "embedding": embedding,
+                "created_at": datetime.utcnow(),
+                "metadata": {
+                    "total_chunks": len(chunks),
+                    "has_screenshot": True,
+                    "screenshot_size": len(screenshot_data) if screenshot_data else 0
+                }
             }
-        }
-        documents_to_insert.append(doc)
-        if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-            print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
-    if documents_to_insert:
-        result = embeddings_collection.insert_many(documents_to_insert)
-        print(f"\n✅ DEBUG: Screenshot stored in MongoDB: document_id={document_id}, chunks={len(documents_to_insert)}\n")
-    else:
-        print(f"❌ DEBUG: No documents to insert for {source_url}\n")
+            documents_to_insert.append(doc)
+            if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
+                print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
+        if documents_to_insert:
+            result = embeddings_collection.insert_many(documents_to_insert)
+            print(f"\n✅ DEBUG: Screenshot stored in MongoDB: document_id={document_id}, chunks={len(documents_to_insert)}\n")
+        else:
+            print(f"❌ DEBUG: No documents to insert for {source_url}\n")
+    except Exception as e:
+        print(f"\n❌ Background embedding failed for {source_url}: {e}\n")
 
 
 @app.post("/api/embed-screenshot/")
@@ -285,6 +288,7 @@ When responding, you MUST return your response in the following JSON format:
 
 Action rules:
 - Use "open_tab" if the user's query requires opening a new browser tab or webpage (e.g., "open YouTube", "search for Python tutorials", "go to github.com")
+- When using "open_tab", you MUST include the full URL to open in the "msg" field (e.g. "Opening https://www.wikipedia.org for you." or "Here is the link: https://youtube.com") so the client can open it. Never use "open_tab" with a msg that does not contain a literal https:// or http:// URL.
 - Use "chat_only" for all other queries (answering questions, explanations, general conversation)
 
 When answering:
@@ -354,6 +358,11 @@ When answering:
             print(f"   Raw response: {response_text[:200]}...")
             msg = response_text
             action = ActionType.CHAT_ONLY
+
+        # Debug: log action and, for open_tab, the message content
+        print(f"   Action: {action.value}")
+        if action == ActionType.OPEN_TAB:
+            print(f"   OPEN_TAB: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
         
         return ChatResponse(action=action, msg=msg)
     

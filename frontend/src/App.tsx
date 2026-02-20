@@ -100,8 +100,10 @@ function Chatbot({ signOut }: ChatbotProps) {
       const data = await response.json()
       // ChatResponse: { action: 'chat_only' | 'open_tab', msg: string }
       const content = data.msg ?? data.response ?? ''
+      console.log('[Chat] response action:', data.action, 'msg length:', content?.length)
       setMessages(prev => [...prev, { role: 'assistant', content }])
       if (data.action === 'open_tab') {
+        console.log('[Chat] OPEN_TAB: calling openTabFromMessage with content:', content?.slice(0, 200))
         openTabFromMessage(content)
       }
     } catch (error: any) {
