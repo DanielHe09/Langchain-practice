@@ -5,9 +5,11 @@ import Login from './components/Login'
 import SignUp from './components/SignUp'
 import { Message } from './types'
 import { openTabFromMessage, openEmailCompose } from './Tools'
+import { getGoogleTokens, setGoogleTokens, clearGoogleTokens } from './utils/googleAuth'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/documents.readonly'
 
 function App() {
   const { user, loading, signOut } = useAuth()
@@ -50,8 +52,14 @@ function Chatbot({ signOut }: ChatbotProps) {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [googleConnected, setGoogleConnected] = useState(false)
+  const [googleConnecting, setGoogleConnecting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    getGoogleTokens().then((t) => setGoogleConnected(!!t.access_token))
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -133,14 +141,86 @@ function Chatbot({ signOut }: ChatbotProps) {
     await signOut()
   }
 
+  const handleConnectGoogle = async () => {
+    const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ?? ''
+    const c = typeof chrome !== 'undefined' ? chrome : (window as any).chrome
+    if (!c?.identity?.launchWebAuthFlow || !c?.runtime?.id) {
+      console.warn('Connect Google: not in extension context or identity unavailable')
+      return
+    }
+    if (!clientId) {
+      console.warn('Connect Google: VITE_GOOGLE_CLIENT_ID not set')
+      return
+    }
+    setGoogleConnecting(true)
+    try {
+      const redirectUri = `https://${c.runtime.id}.chromiumapp.org/`
+      const authUrl =
+        'https://accounts.google.com/o/oauth2/v2/auth?' +
+        new URLSearchParams({
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          response_type: 'code',
+          scope: GOOGLE_SCOPES,
+          access_type: 'offline',
+          prompt: 'consent',
+        }).toString()
+      const redirectUrl = await c.identity.launchWebAuthFlow({
+        url: authUrl,
+        interactive: true,
+      })
+      const parsed = new URL(redirectUrl)
+      const code = parsed.searchParams.get('code')
+      if (!code) throw new Error('No code in redirect')
+      const res = await fetch(`${API_URL}/api/google-auth/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, redirect_uri: redirectUri }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      await setGoogleTokens(
+        data.access_token,
+        data.refresh_token ?? null,
+        data.expires_in ?? 3600
+      )
+      setGoogleConnected(true)
+    } catch (e) {
+      console.error('Connect Google failed:', e)
+    } finally {
+      setGoogleConnecting(false)
+    }
+  }
+
+  const handleDisconnectGoogle = async () => {
+    await clearGoogleTokens()
+    setGoogleConnected(false)
+  }
+
   return (
     <div className="app">
       <div className="container">
         <div className="header">
           <h2>🤖 Dex2</h2>
-          <button onClick={handleSignOut} className="logout-button">
-            Sign out
-          </button>
+          <div className="header-actions">
+            {googleConnected ? (
+              <button type="button" onClick={handleDisconnectGoogle} className="logout-button">
+                Disconnect Google
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleConnectGoogle}
+                disabled={googleConnecting}
+                className="logout-button"
+              >
+                {googleConnecting ? 'Connecting…' : 'Connect Google'}
+              </button>
+            )}
+            <button onClick={handleSignOut} className="logout-button">
+              Sign out
+            </button>
+          </div>
         </div>
         
         <div className="messages" id="messages">

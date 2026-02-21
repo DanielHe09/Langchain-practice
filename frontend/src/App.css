@@ -36,6 +36,12 @@
   flex: 1;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .logout-button {
   background: transparent;
   border: none;

@@ -10,13 +10,10 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": [
-    "storage",
-    "tabs",
-    "activeTab"
-  ],
+  "permissions": ["storage", "tabs", "activeTab", "identity"],
   "host_permissions": [
     "http://localhost:8000/*",
+    "https://accounts.google.com/*",
     "<all_urls>"
   ],
   "content_security_policy": {

@@ -1,4 +1,6 @@
 // Background script to handle tab screenshots
+import { getValidGoogleAccessToken } from './utils/googleAuth'
+
 console.log('Background script loaded!')
 let previousActiveTabId: number | null = null
 const API_URL = 'http://localhost:8000'
@@ -31,11 +33,15 @@ async function sendScreenshotToBackend(dataUrl: string, url: string, title?: str
       'Content-Type': 'application/json',
     }
     
-    // Add Authorization header if token exists
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
     } else {
       console.warn('⚠️ No token found - screenshot will be sent without authentication')
+    }
+
+    const googleToken = await getValidGoogleAccessToken(API_URL)
+    if (googleToken) {
+      headers['X-Google-Access-Token'] = googleToken
     }
     
     const response = await fetch(`${API_URL}/api/embed-screenshot/`, {
