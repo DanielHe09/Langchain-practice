@@ -54,6 +54,7 @@ function Chatbot({ signOut }: ChatbotProps) {
   const [loading, setLoading] = useState(false)
   const [googleConnected, setGoogleConnected] = useState(false)
   const [googleConnecting, setGoogleConnecting] = useState(false)
+  const [googleError, setGoogleError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -142,17 +143,20 @@ function Chatbot({ signOut }: ChatbotProps) {
   }
 
   const handleConnectGoogle = async () => {
+    setGoogleError(null)
+    setGoogleConnecting(true)
     const clientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ?? ''
     const c = typeof chrome !== 'undefined' ? chrome : (window as any).chrome
     if (!c?.identity?.launchWebAuthFlow || !c?.runtime?.id) {
-      console.warn('Connect Google: not in extension context or identity unavailable')
+      setGoogleConnecting(false)
+      setGoogleError('Go to chrome://extensions → click the refresh icon on this extension, then try Connect Google again.')
       return
     }
     if (!clientId) {
-      console.warn('Connect Google: VITE_GOOGLE_CLIENT_ID not set')
+      setGoogleConnecting(false)
+      setGoogleError('Add VITE_GOOGLE_CLIENT_ID to frontend/.env and run: npm run build, then reload the extension.')
       return
     }
-    setGoogleConnecting(true)
     try {
       const redirectUri = `https://${c.runtime.id}.chromiumapp.org/`
       const authUrl =
@@ -185,7 +189,15 @@ function Chatbot({ signOut }: ChatbotProps) {
         data.expires_in ?? 3600
       )
       setGoogleConnected(true)
-    } catch (e) {
+    } catch (e: any) {
+      const msg = e?.message || String(e)
+      if (msg.includes('Authorization page could not be loaded') || msg.includes('redirect_uri')) {
+        setGoogleError('Add redirect URI in Google Cloud: https://YOUR_EXTENSION_ID.chromiumapp.org/')
+      } else if (msg.includes('canceled') || msg.includes('cancelled') || msg.includes('user closed')) {
+        setGoogleError('Sign-in was cancelled.')
+      } else {
+        setGoogleError(msg.length > 80 ? msg.slice(0, 80) + '…' : msg)
+      }
       console.error('Connect Google failed:', e)
     } finally {
       setGoogleConnecting(false)
@@ -195,6 +207,7 @@ function Chatbot({ signOut }: ChatbotProps) {
   const handleDisconnectGoogle = async () => {
     await clearGoogleTokens()
     setGoogleConnected(false)
+    setGoogleError(null)
   }
 
   return (
@@ -222,6 +235,11 @@ function Chatbot({ signOut }: ChatbotProps) {
             </button>
           </div>
         </div>
+        {googleError && (
+          <div className="google-error" role="alert">
+            {googleError}
+          </div>
+        )}
         
         <div className="messages" id="messages">
           {messages.map((message, index) => (

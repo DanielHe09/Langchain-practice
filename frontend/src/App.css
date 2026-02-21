@@ -42,6 +42,18 @@
   gap: 8px;
 }
 
+.google-error {
+  padding: 10px 20px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fca5a5;
+  background: #2d1f1f;
+  border-bottom: 1px solid #3f3f46;
+  flex-shrink: 0;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
 .logout-button {
   background: transparent;
   border: none;
