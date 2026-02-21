@@ -137,7 +137,7 @@ function Chatbot({ signOut }: ChatbotProps) {
     <div className="app">
       <div className="container">
         <div className="header">
-          <h2>🤖 Chatbot</h2>
+          <h2>🤖 Dex2</h2>
           <button onClick={handleSignOut} className="logout-button">
             Sign out
           </button>
