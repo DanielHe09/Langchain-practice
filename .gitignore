@@ -36,3 +36,6 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+
+#Google Cloud Service Account Key JSON file
+gen-lang-client-0949403665-72ea8b869186.json
