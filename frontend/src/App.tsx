@@ -4,7 +4,7 @@ import { authenticatedFetch } from './utils/api'
 import Login from './components/Login'
 import SignUp from './components/SignUp'
 import { Message } from './types'
-import { openTabFromMessage } from './Tools'
+import { openTabFromMessage, openEmailCompose } from './Tools'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
@@ -98,13 +98,17 @@ function Chatbot({ signOut }: ChatbotProps) {
       }
 
       const data = await response.json()
-      // ChatResponse: { action: 'chat_only' | 'open_tab', msg: string }
+      // ChatResponse: { action: 'chat_only' | 'open_tab' | 'send_email', msg: string, email_url?: string }
       const content = data.msg ?? data.response ?? ''
       console.log('[Chat] response action:', data.action, 'msg length:', content?.length)
       setMessages(prev => [...prev, { role: 'assistant', content }])
       if (data.action === 'open_tab') {
         console.log('[Chat] OPEN_TAB: calling openTabFromMessage with content:', content?.slice(0, 200))
         openTabFromMessage(content)
+      }
+      if (data.action === 'send_email' && data.email_url) {
+        console.log('[Chat] SEND_EMAIL: opening Gmail compose')
+        openEmailCompose(data.email_url)
       }
     } catch (error: any) {
       console.error('Error:', error)

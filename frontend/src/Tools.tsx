@@ -38,3 +38,29 @@ export function openTabFromMessage(content: string): void {
     if (DEBUG) console.error('[openTabFromMessage] error:', e)
   }
 }
+
+/**
+ * Opens the Gmail compose URL in a new tab (e.g. from send_email action).
+ * Uses chrome.tabs in extension context, otherwise window.open.
+ * No-op if no valid emailUrl is provided.
+ */
+export function openEmailCompose(emailUrl: string | null | undefined): void {
+  const DEBUG = true
+  try {
+    const url = (emailUrl ?? '').trim()
+    if (!url || !url.startsWith('http')) {
+      if (DEBUG) console.log('[openEmailCompose] skipping: no valid email_url')
+      return
+    }
+    const chromeApi = typeof chrome !== 'undefined' ? chrome : (typeof (window as any).chrome !== 'undefined' ? (window as any).chrome : null)
+    if (chromeApi?.tabs?.create) {
+      chromeApi.tabs.create({ url })
+      if (DEBUG) console.log('[openEmailCompose] opened tab:', url)
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer')
+      if (DEBUG) console.log('[openEmailCompose] opened window:', url)
+    }
+  } catch (e) {
+    if (DEBUG) console.error('[openEmailCompose] error:', e)
+  }
+}
