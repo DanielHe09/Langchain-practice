@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 from enum import Enum
 import json
 import re
+from urllib.parse import urlencode
 
 load_dotenv()
 
@@ -68,12 +69,14 @@ class ActionType(str, Enum):
     """Action types for chat responses"""
     CHAT_ONLY = "chat_only"
     OPEN_TAB = "open_tab"
+    SEND_EMAIL = "send_email"
 
 
 class ChatResponse(BaseModel):
     """Response model for chat endpoint"""
     action: ActionType
     msg: str
+    email_url: Optional[str] = None  # Gmail compose URL when action is send_email
 
 
 class ScreenshotRequest(BaseModel):
@@ -280,15 +283,14 @@ async def chat(
         # System message that instructs the agent to use the retrieved context and return structured output
         system_prompt = """You are a helpful assistant that answers questions based on the provided context from a knowledge base.
 
-When responding, you MUST return your response in the following JSON format:
-{
-  "action": "chat_only" or "open_tab",
-  "msg": "your response message here"
-}
+When responding, you MUST return your response in the following JSON format.
+For "chat_only" or "open_tab": { "action": "chat_only" or "open_tab", "msg": "your response message here" }
+For "send_email": { "action": "send_email", "msg": "brief confirmation for the user", "email_to": "recipient@example.com", "email_subject": "Subject line", "email_body": "Draft body text" }
 
 Action rules:
 - Use "open_tab" if the user's query requires opening a new browser tab or webpage (e.g., "open YouTube", "search for Python tutorials", "go to github.com")
 - When using "open_tab", you MUST include the full URL to open in the "msg" field (e.g. "Opening https://www.wikipedia.org for you." or "Here is the link: https://youtube.com") so the client can open it. Never use "open_tab" with a msg that does not contain a literal https:// or http:// URL.
+- Use "send_email" when the user explicitly wants to send, compose, or draft an email (e.g., "send an email to John", "email my team about the meeting", "compose an email to support@example.com"). When using "send_email" you MUST also include "email_to", "email_subject", and "email_body" in the JSON so the client can open a Gmail draft. Do NOT use "send_email" for general questions about email—only when the user wants to actually send one.
 - Use "chat_only" for all other queries (answering questions, explanations, general conversation)
 
 When answering:
@@ -328,7 +330,8 @@ When answering:
         # Try to extract JSON from the response
         action = ActionType.CHAT_ONLY  # Default action
         msg = response_text  # Default message
-        
+        email_url = None
+
         try:
             # Try to find JSON in the response (handles cases where LLM adds extra text)
             json_match = re.search(r'\{[^{}]*"action"[^{}]*"msg"[^{}]*\}', response_text, re.DOTALL)
@@ -336,10 +339,12 @@ When answering:
                 parsed = json.loads(json_match.group())
                 action_str = parsed.get("action", "chat_only").lower()
                 msg = parsed.get("msg", response_text)
-                
+
                 # Validate and set action
                 if action_str == "open_tab":
                     action = ActionType.OPEN_TAB
+                elif action_str == "send_email":
+                    action = ActionType.SEND_EMAIL
                 else:
                     action = ActionType.CHAT_ONLY
             else:
@@ -347,11 +352,29 @@ When answering:
                 parsed = json.loads(response_text)
                 action_str = parsed.get("action", "chat_only").lower()
                 msg = parsed.get("msg", response_text)
-                
+
                 if action_str == "open_tab":
                     action = ActionType.OPEN_TAB
+                elif action_str == "send_email":
+                    action = ActionType.SEND_EMAIL
                 else:
                     action = ActionType.CHAT_ONLY
+
+            # Build Gmail compose URL when action is send_email
+            if action == ActionType.SEND_EMAIL:
+                email_to = (parsed.get("email_to") or "").strip()
+                email_subject = (parsed.get("email_subject") or "").strip()
+                email_body = (parsed.get("email_body") or "").strip()
+                # Truncate body to avoid URL length limits (~2000 chars safe)
+                max_body_len = 1500
+                if len(email_body) > max_body_len:
+                    email_body = email_body[:max_body_len] + "..."
+                if email_to or email_subject or email_body:
+                    email_url = "https://mail.google.com/mail/?view=cm&fs=1&" + urlencode({
+                        "to": email_to,
+                        "su": email_subject,
+                        "body": email_body,
+                    })
         except (json.JSONDecodeError, KeyError, AttributeError) as e:
             # If JSON parsing fails, use the raw response as message with default action
             print(f"⚠️ DEBUG: Failed to parse structured response, using default: {str(e)}")
@@ -359,12 +382,16 @@ When answering:
             msg = response_text
             action = ActionType.CHAT_ONLY
 
-        # Debug: log action and, for open_tab, the message content
+        # Debug: log action and, for open_tab/send_email, the message content
         print(f"   Action: {action.value}")
         if action == ActionType.OPEN_TAB:
             print(f"   OPEN_TAB: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
-        
-        return ChatResponse(action=action, msg=msg)
+        if action == ActionType.SEND_EMAIL:
+            print(f"   SEND_EMAIL: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
+            if email_url:
+                print(f"   SEND_EMAIL: email_url generated")
+
+        return ChatResponse(action=action, msg=msg, email_url=email_url)
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
