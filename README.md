@@ -2,6 +2,10 @@
 
 Dex2 is a Chrome extension plus FastAPI backend. The extension captures screenshots of visited pages, sends them to the backend for text extraction and embedding, and a chat UI queries the backend with RAG (retrieval-augmented generation). The backend uses hybrid retrieval (vector + BM25), returns structured actions (chat, open tab, send email), and the extension executes those actions.
 
+## Architecture
+
+![Dex2 architecture diagram](diagram-export-2026-02-22-12_17_41-PM.png)
+
 ---
 
 ## Project structure
