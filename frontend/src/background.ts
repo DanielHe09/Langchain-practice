@@ -1,9 +1,42 @@
-// Background script to handle tab screenshots
-import { getValidGoogleAccessToken } from './utils/googleAuth'
+// Background script to handle tab screenshots and Google token storage
+import { getValidGoogleAccessToken, setGoogleTokens } from './utils/googleAuth'
 
 console.log('Background script loaded!')
-let previousActiveTabId: number | null = null
 const API_URL = 'http://localhost:8000'
+
+// Handle Connect Google: exchange code for tokens and store in chrome.storage (so tokens persist when popup closes)
+chrome.runtime.onMessage.addListener(
+  (
+    msg: { type: string; code?: string; redirect_uri?: string },
+    _sender: chrome.runtime.MessageSender,
+    sendResponse: (response: { success: boolean; error?: string }) => void
+  ) => {
+    if (msg.type !== 'GOOGLE_AUTH_SAVE' || !msg.code || !msg.redirect_uri) {
+      sendResponse({ success: false, error: 'Missing code or redirect_uri' })
+      return true
+    }
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/google-auth/code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: msg.code, redirect_uri: msg.redirect_uri }),
+        })
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        await setGoogleTokens(
+          data.access_token,
+          data.refresh_token ?? null,
+          data.expires_in ?? 3600
+        )
+        sendResponse({ success: true })
+      } catch (e: any) {
+        sendResponse({ success: false, error: e?.message || String(e) })
+      }
+    })()
+    return true // keep channel open for async sendResponse
+  }
+)
 
 // Function to get token from chrome.storage
 async function getStoredToken(): Promise<string | null> {
@@ -42,8 +75,11 @@ async function sendScreenshotToBackend(dataUrl: string, url: string, title?: str
     const googleToken = await getValidGoogleAccessToken(API_URL)
     if (googleToken) {
       headers['X-Google-Access-Token'] = googleToken
+      console.log('🔑 Google token attached for screenshot')
+    } else {
+      console.log('🔑 No Google token in storage – Connect Google in the popup to read Sheets/Docs')
     }
-    
+
     const response = await fetch(`${API_URL}/api/embed-screenshot/`, {
       method: 'POST',
       headers: headers,
@@ -108,8 +144,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
             return // Skip if URL became invalid
           }
           
-          // Capture the visible tab in the current window
-          const dataUrl = await chrome.tabs.captureVisibleTab(null, {
+          // Capture the visible tab in the tab's window (current window when active)
+          const dataUrl = await chrome.tabs.captureVisibleTab(currentTab.windowId, {
             format: 'png',
             quality: 100
           })
@@ -128,7 +164,6 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
       }, 500) // Wait 500ms for page to render
     }
     
-    previousActiveTabId = tabId
   } catch (error: any) {
     // Silently ignore errors for tabs we can't access
     if (error.message && error.message.includes('Cannot access contents')) {
@@ -157,7 +192,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
             return // Skip if URL became invalid or tab is no longer active
           }
           
-          const dataUrl = await chrome.tabs.captureVisibleTab(null, {
+          const dataUrl = await chrome.tabs.captureVisibleTab(currentTab.windowId, {
             format: 'png',
             quality: 100
           })

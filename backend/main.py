@@ -323,6 +323,15 @@ async def embed_screenshot(
     google_token = (x_google_access_token or "").strip() or None
     print(f"\n📸 Screenshot received: {request.source_url} (token present: {bool(supabase_token)}, Google token: {bool(google_token)})\n")
 
+    # Skip embedding for Google OAuth / sign-in pages (they're not useful content and often return 400)
+    if "accounts.google.com" in (request.source_url or ""):
+        print("   Skipping embed for Google auth page.\n")
+        return {
+            "status": "skipped",
+            "message": "Screenshot accepted but not embedded (Google sign-in page).",
+            "source_url": request.source_url,
+        }
+
     text = extract_text_from_url(request.source_url, google_access_token=google_token)
     if not text.strip():
         print(f"❌ No text extracted from URL: {request.source_url}")

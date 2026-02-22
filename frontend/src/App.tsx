@@ -5,7 +5,7 @@ import Login from './components/Login'
 import SignUp from './components/SignUp'
 import { Message } from './types'
 import { openTabFromMessage, openEmailCompose } from './Tools'
-import { getGoogleTokens, setGoogleTokens, clearGoogleTokens } from './utils/googleAuth'
+import { getGoogleTokens, clearGoogleTokens } from './utils/googleAuth'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
@@ -58,8 +58,24 @@ function Chatbot({ signOut }: ChatbotProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
+  const refreshGoogleState = () => {
     getGoogleTokens().then((t) => setGoogleConnected(!!t.access_token))
+  }
+
+  useEffect(() => {
+    refreshGoogleState()
+    const c = typeof chrome !== 'undefined' ? chrome : (window as any).chrome
+    if (c?.storage?.onChanged?.addListener) {
+      const listener = () => refreshGoogleState()
+      c.storage.onChanged.addListener(listener)
+      return () => c.storage.onChanged.removeListener(listener)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onFocus = () => refreshGoogleState()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [])
 
   const scrollToBottom = () => {
@@ -176,19 +192,17 @@ function Chatbot({ signOut }: ChatbotProps) {
       const parsed = new URL(redirectUrl)
       const code = parsed.searchParams.get('code')
       if (!code) throw new Error('No code in redirect')
-      const res = await fetch(`${API_URL}/api/google-auth/code`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, redirect_uri: redirectUri }),
+      // Send code to background so it does the exchange and writes to storage (persists even if popup closes)
+      const response = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+        c.runtime.sendMessage(
+          { type: 'GOOGLE_AUTH_SAVE', code, redirect_uri: redirectUri },
+          (r: { success: boolean; error?: string } | undefined) => resolve(r || { success: false })
+        )
       })
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      await setGoogleTokens(
-        data.access_token,
-        data.refresh_token ?? null,
-        data.expires_in ?? 3600
-      )
-      setGoogleConnected(true)
+      if (!response.success) throw new Error(response.error || 'Failed to save tokens')
+      const check = await getGoogleTokens()
+      setGoogleConnected(!!check.access_token)
+      if (!check.access_token) setGoogleError('Saved in background; reopen the popup to see Disconnect Google.')
     } catch (e: any) {
       const msg = e?.message || String(e)
       if (msg.includes('Authorization page could not be loaded') || msg.includes('redirect_uri')) {
