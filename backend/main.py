@@ -294,14 +294,14 @@ def _run_embedding_sync(
             }
             documents_to_insert.append(doc)
             if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-                print(f"   ✓ Created embedding {i + 1}/{len(chunks)}")
+                print(f"   Created embedding {i + 1}/{len(chunks)}")
         if documents_to_insert:
             result = embeddings_collection.insert_many(documents_to_insert)
-            print(f"\n✅ DEBUG: Screenshot stored in MongoDB: document_id={document_id}, chunks={len(documents_to_insert)}\n")
+            print(f"\n   DEBUG: Screenshot stored in MongoDB: document_id={document_id}, chunks={len(documents_to_insert)}\n")
         else:
-            print(f"❌ DEBUG: No documents to insert for {source_url}\n")
+            print(f"   DEBUG: No documents to insert for {source_url}\n")
     except Exception as e:
-        print(f"\n❌ Background embedding failed for {source_url}: {e}\n")
+        print(f"\nBackground embedding failed for {source_url}: {e}\n")
 
 
 @app.post("/api/embed-screenshot/")
@@ -321,7 +321,7 @@ async def embed_screenshot(
         supabase_token = authorization.split(" ")[1]
 
     google_token = (x_google_access_token or "").strip() or None
-    print(f"\n📸 Screenshot received: {request.source_url} (token present: {bool(supabase_token)}, Google token: {bool(google_token)})\n")
+    print(f"\nScreenshot received: {request.source_url} (token present: {bool(supabase_token)}, Google token: {bool(google_token)})\n")
 
     # Skip embedding for Google OAuth / sign-in pages (they're not useful content and often return 400)
     if "accounts.google.com" in (request.source_url or ""):
@@ -334,7 +334,7 @@ async def embed_screenshot(
 
     text = extract_text_from_url(request.source_url, google_access_token=google_token)
     if not text.strip():
-        print(f"❌ No text extracted from URL: {request.source_url}")
+        print(f"No text extracted from URL: {request.source_url}")
         raise HTTPException(
             status_code=400,
             detail="Could not extract text from webpage. The page might require JavaScript or be inaccessible."
@@ -477,7 +477,7 @@ async def chat(
         if authorization and authorization.startswith("Bearer "):
             supabase_token = authorization.split(" ")[1]
         
-        print(f"🔐 DEBUG: Chat request - Token present: {bool(supabase_token)}")
+        print(f"DEBUG: Chat request - Token present: {bool(supabase_token)}")
 
         # Step 1: Retrieve relevant context from vector store (filtered by user token)
         context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
@@ -580,7 +580,7 @@ When answering:
                     })
         except (json.JSONDecodeError, KeyError, AttributeError) as e:
             # If JSON parsing fails, use the raw response as message with default action
-            print(f"⚠️ DEBUG: Failed to parse structured response, using default: {str(e)}")
+            print(f"DEBUG: Failed to parse structured response, using default: {str(e)}")
             print(f"   Raw response: {response_text[:200]}...")
             msg = response_text
             action = ActionType.CHAT_ONLY
