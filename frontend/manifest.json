@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "LangChain Chatbot",
+  "name": "Dex2",
   "version": "1.0.0",
   "description": "Chatbot extension that connects to your LangChain backend",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "LangChain Chatbot"
+    "default_title": "Dex2"
   },
   "background": {
     "service_worker": "background.js",
