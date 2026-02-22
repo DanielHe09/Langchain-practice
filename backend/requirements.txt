@@ -13,3 +13,4 @@ pypdf==3.17.4
 numpy>=1.24.0
 httpx>=0.24.0
 beautifulsoup4>=4.12.0
+rank-bm25>=0.2.2
