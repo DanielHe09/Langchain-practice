@@ -8,7 +8,7 @@ Dex2 is a Chrome extension plus FastAPI backend. The extension captures screensh
 
 ### Demo
 
-[Watch the demo](Dex2%20Demo.mp4)
+[Watch the demo](https://www.youtube.com/watch?v=fhYGrfLmNnQ)
 
 ---
 
