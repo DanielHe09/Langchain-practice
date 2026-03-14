@@ -50,7 +50,7 @@ def create_shape(
             "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["background_color"])}}
         }
         shape_fields.append("shapeBackgroundFill.solidFill.color")
-    if "border_color" in inst or "border_weight_pt" in inst:
+    if "border_color" in inst or (inst.get("border_weight_pt", 0) or 0) > 0:
         outline = {}
         outline_fields = []
         if "border_color" in inst:
@@ -58,11 +58,13 @@ def create_shape(
                 "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["border_color"])}}
             }
             outline_fields.append("outline.outlineFill.solidFill.color")
-        if "border_weight_pt" in inst:
-            outline["weight"] = {"magnitude": inst["border_weight_pt"], "unit": "PT"}
+        weight_pt = inst.get("border_weight_pt") or 0
+        if weight_pt > 0:
+            outline["weight"] = {"magnitude": weight_pt, "unit": "PT"}
             outline_fields.append("outline.weight")
-        shape_props["outline"] = outline
-        shape_fields.extend(outline_fields)
+        if outline:
+            shape_props["outline"] = outline
+            shape_fields.extend(outline_fields)
     if shape_props and shape_fields:
         requests.append({
             "updateShapeProperties": {
@@ -249,6 +251,41 @@ def edit_instructions_to_batch_requests(
                         "textRange": {"type": "ALL"},
                         "style": style,
                         "fields": ",".join(fields),
+                    }
+                })
+            continue
+
+        if action == "update_shape_fill":
+            if "shape" not in el:
+                print(f"   SLIDES: skipping update_shape_fill for {obj_id} (not a shape)")
+                continue
+            shape_props = {}
+            shape_fields = []
+            if "background_color" in inst:
+                shape_props["shapeBackgroundFill"] = {
+                    "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["background_color"])}}
+                }
+                shape_fields.append("shapeBackgroundFill.solidFill.color")
+            weight_pt = inst.get("border_weight_pt") or 0
+            if "border_color" in inst or weight_pt > 0:
+                outline = {}
+                outline_fields = []
+                if "border_color" in inst:
+                    outline["outlineFill"] = {
+                        "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["border_color"])}}
+                    }
+                    outline_fields.append("outline.outlineFill.solidFill.color")
+                if weight_pt > 0:
+                    outline["weight"] = {"magnitude": weight_pt, "unit": "PT"}
+                    outline_fields.append("outline.weight")
+                shape_props["outline"] = outline
+                shape_fields.extend(outline_fields)
+            if shape_props and shape_fields:
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": obj_id,
+                        "shapeProperties": shape_props,
+                        "fields": ",".join(shape_fields),
                     }
                 })
             continue

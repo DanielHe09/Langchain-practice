@@ -22,7 +22,7 @@ Operation types:
 Rules:
 - "add a section", "add a box", "add text about X", "draw a line" → create_content (NOT create_slide)
 - "make this symmetrical", "center these", "move X to the right" → edit_layout
-- "change the font to Arial", "make text bigger", "replace the title text" → edit_text
+- "change the font to Arial", "make text bigger", "replace the title text", "change the background/fill color", "match the colors", "change colors of text boxes" → edit_text
 - "what font is on slide 2?", "what does slide 5 say?" → answer_question
 - If the current slide has NO free space and the user wants to add substantial content, use "create_slide"
 - Output ONLY the JSON object, no markdown."""

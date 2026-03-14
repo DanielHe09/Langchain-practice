@@ -38,7 +38,7 @@ Line instruction:
 
 Rules:
 - ALWAYS include "text" with actual content when user asks to add a section/content about something.
-- Match existing element styles: use same fonts, colors, and background fills (look at style and bg: values).
+- For background_color and color (text): use ONLY hex values from existing elements (style and bg: in the element list) or from "Common background fills" / "Common text accent colors" in the presentation. Do not use #ffffff or generic gray unless the deck already uses them.
 - Use RECTANGLE or ROUND_RECTANGLE with background_color for card-style sections.
 - A new element at y=Y with height=H MUST fit within a free-space gap: Y >= gap_start AND Y + H <= gap_end.
 - If content doesn't fit, SHRINK height or font size to fit within the gap.
@@ -57,25 +57,33 @@ Each instruction creates a shape on the NEW slide:
 
 Rules:
 - Design a COMPLETE slide layout — add title, body content, decorative elements as needed.
-- MATCH the presentation's visual style: use the same fonts, colors, and background patterns shown in the other slides' style info.
+- For every shape, set background_color and color (text) using ONLY the hex values from "Common background fills" and "Common text accent colors" / "Common fonts" in the presentation visual style. Do not invent colors; do not use #ffffff or generic gray unless the deck uses them.
 - Cover the full slide area (dimensions provided). Don't leave the slide empty.
 - Generate real, substantive content for the topic the user requested.
 - Use shapes with background_color for card-style sections, matching existing bg: colors.
+
+COPY FROM CURRENT SLIDE when the user asks to copy the heading, footer, or table of contents:
+- HEADING: Look at the CURRENT SLIDE elements at the top. If there is a vertical line + title + subtitle layout, REPLICATE it: create a thin vertical RECTANGLE (same color as original), then a title shape, then a subtitle shape — same relative positions (x_pt, y_pt) and sizes (width_pt, height_pt), same fonts and colors; only change the title/subtitle text to fit the new slide topic.
+- TABLE OF CONTENTS / FOOTER: Look at the CURRENT SLIDE elements at the bottom. If there are multiple separate shapes (tabs like "Business Overview", "Market Feasibility", etc.), REPLICATE that structure: create one create_shape per tab, same count, same relative positions and sizes, same bg: and style; you may update the tab labels to match the new slide (e.g. keep "Conclusion" or add "Long Term Trends") but keep the same visual layout.
+- Do not replace the heading or ToC with a single simplified shape — copy the actual structure (multiple elements) so it looks like the original.
+
 - No markdown fences. Output ONLY the JSON object."""
 
 
 # ---------------------------------------------------------------------------
-EDIT_TEXT_PROMPT = """You edit text content and formatting on existing Google Slides elements. Output a JSON object:
+EDIT_TEXT_PROMPT = """You edit text content, formatting, and shape fill/outline on existing Google Slides elements. Output a JSON object:
 {"instructions": [...], "message": "brief summary"}
 
 Replace text: {"action": "replace_text", "objectId": "...", "new_text": "..."}
-Update style: {"action": "update_text_style", "objectId": "...", "font_size_pt": ..., "bold": true/false, "italic": true/false, "underline": true/false, "font_family": "...", "color": "#hex"}
+Update text style: {"action": "update_text_style", "objectId": "...", "font_size_pt": ..., "bold": true/false, "italic": true/false, "underline": true/false, "font_family": "...", "color": "#hex"}
+Update shape fill/background (for text boxes and shapes): {"action": "update_shape_fill", "objectId": "...", "background_color": "#hex", "border_color": "#hex", "border_weight_pt": number (optional, omit or use 0 for no border)}
 
 Rules:
 - replace_text replaces ALL text in the element.
-- update_text_style applies to ALL text in the element.
-- You can combine both on the same element.
-- When matching formatting across slides, use the style info from other slides.
+- update_text_style applies to ALL text in the element (color = text color).
+- update_shape_fill changes the shape's background fill and/or border. Use when the user says "change the background/fill color", "match the colors", "make these boxes the same color as the rest of the slideshow". Use hex values from the slide's existing elements (style and bg: in the element list) or from "Common background fills" / "Common text accent colors" in the presentation style.
+- You can combine replace_text, update_text_style, and update_shape_fill on the same or different elements.
+- When the user wants colors to match the slideshow, apply update_shape_fill (and update_text_style for text color) to the relevant elements using the deck's actual colors from the context.
 - No markdown fences. Output ONLY the JSON object."""
 
 

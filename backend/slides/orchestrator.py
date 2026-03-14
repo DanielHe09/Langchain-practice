@@ -101,7 +101,8 @@ def handle_edit_slides(
         )
 
     elif operation == "edit_text":
-        instructions, llm_message, _ = call_executor(EDIT_TEXT_PROMPT, full_desc, user_message)
+        edit_ctx = full_desc + "\n\n" + extract_presentation_style(presentation)
+        instructions, llm_message, _ = call_executor(EDIT_TEXT_PROMPT, edit_ctx, user_message)
 
     else:
         instructions, llm_message, _ = call_executor(EDIT_LAYOUT_PROMPT, full_desc, user_message)
