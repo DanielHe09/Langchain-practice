@@ -155,6 +155,16 @@ def _summarize_element(el: dict) -> Optional[dict]:
         if styles_seen:
             unique_styles = list(dict.fromkeys(styles_seen))
             text_style_desc = " | ".join(unique_styles[:3])
+        bg_fill = el["shape"].get("shapeProperties", {}).get("shapeBackgroundFill", {})
+        solid = bg_fill.get("solidFill", {})
+        bg_rgb = solid.get("color", {}).get("rgbColor", {})
+        if bg_rgb:
+            br = int(bg_rgb.get("red", 1) * 255)
+            bg = int(bg_rgb.get("green", 1) * 255)
+            bb = int(bg_rgb.get("blue", 1) * 255)
+            bg_hex = f"#{br:02x}{bg:02x}{bb:02x}"
+            if bg_hex != "#ffffff":
+                text_style_desc += f" | bg:{bg_hex}"
     elif "image" in el:
         el_type = "image"
     elif "table" in el:
@@ -204,6 +214,35 @@ def _build_slide_description(
         if s.get("style"):
             desc += f', style: [{s["style"]}]'
         lines.append(desc)
+
+    # Compute vertical free space gaps for the LLM
+    occupied = []
+    for s in summaries:
+        if s["width_pt"] > 0 and s["height_pt"] > 0:
+            occupied.append((s["y_pt"], s["y_pt"] + s["height_pt"]))
+    occupied.sort()
+    merged = []
+    for start, end in occupied:
+        if merged and start <= merged[-1][1] + 2:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    gaps = []
+    prev_end = 0.0
+    for start, end in merged:
+        if start - prev_end >= 15:
+            gaps.append((round(prev_end, 1), round(start, 1), round(start - prev_end, 1)))
+        prev_end = end
+    if page_h_pt - prev_end >= 15:
+        gaps.append((round(prev_end, 1), round(page_h_pt, 1), round(page_h_pt - prev_end, 1)))
+
+    if gaps:
+        lines.append("")
+        lines.append("Available vertical free space (no elements):")
+        for g_start, g_end, g_height in gaps:
+            lines.append(f"  - y: {g_start} to {g_end} ({g_height} PT tall)")
+        lines.append("*** Place new elements ONLY within these free-space gaps to avoid overlaps. ***")
 
     return "\n".join(lines)
 
@@ -291,10 +330,10 @@ def _build_full_presentation_context(
 
 SLIDES_LLM_SYSTEM = """You are a Google Slides layout assistant. You receive a detailed description of the current slide's elements, a summary of ALL other slides in the presentation, and a user request. You output JSON instructions.
 
-*** CRITICAL RULE — create_text_box vs create_slide ***
-- DEFAULT to "create_text_box" when the user wants to ADD content to the CURRENT slide (e.g. "add a section", "add text about X", "add a box at the bottom", "put a summary here", "add content about Y").
+*** CRITICAL RULE — adding to CURRENT slide vs creating a NEW slide ***
+- DEFAULT to "create_shape" when the user wants to ADD content/elements to the CURRENT slide (e.g. "add a section", "add a box", "add text about X", "draw a line", "put a rectangle here").
 - ONLY use "create_slide" when the user EXPLICITLY says "new slide", "create a slide", "add a slide", or "next slide".
-- If ambiguous, ALWAYS prefer create_text_box on the current slide.
+- If ambiguous, ALWAYS prefer adding to the current slide.
 ***
 
 Supported instruction types:
@@ -305,28 +344,42 @@ Supported instruction types:
 - "x_pt", "y_pt": new position in points (for move/move_and_resize)
 - "width_pt", "height_pt": new size in points (for resize/move_and_resize)
 
-2. Create text box (add a NEW text box to the CURRENT slide):
-- "action": "create_text_box"
+2. Create shape (add a NEW shape to the CURRENT slide):
+- "action": "create_shape"
+- "shape_type": one of "TEXT_BOX", "RECTANGLE", "ROUND_RECTANGLE", "ELLIPSE", "TRIANGLE", "ARROW_NORTH", "ARROW_EAST", "ARROW_SOUTH", "ARROW_WEST", "STAR_4", "STAR_5", "HEART", "CLOUD" (default: "TEXT_BOX")
 - "x_pt": X position in points
 - "y_pt": Y position in points
 - "width_pt": width in points
 - "height_pt": height in points
-- "text": text content (string)
-- Optional style: "font_size_pt", "bold", "italic", "underline", "font_family", "color" (hex)
+- "text": optional text content (string)
+- Optional text style: "font_size_pt", "bold", "italic", "underline", "font_family", "color" (hex text color)
+- "background_color": optional hex fill color (e.g. "#e8e8e8", "#233548"). Look at existing elements' bg: values to match the slide's visual style.
+- "border_color": optional hex border/outline color
+- "border_weight_pt": optional border thickness in points
 
-3. Create slide (add a BRAND NEW SLIDE — only when user explicitly asks):
+3. Create line (add a line to the CURRENT slide):
+- "action": "create_line"
+- "line_type": one of "STRAIGHT", "BENT", "CURVED" (default: "STRAIGHT")
+- "start_x_pt": start X in points
+- "start_y_pt": start Y in points
+- "end_x_pt": end X in points
+- "end_y_pt": end Y in points
+- "color": optional hex line color
+- "weight_pt": optional line thickness in points
+
+4. Create slide (add a BRAND NEW SLIDE — only when user explicitly asks):
 - "action": "create_slide"
 - "layout": one of "BLANK", "TITLE", "TITLE_AND_BODY", "TITLE_AND_TWO_COLUMNS", "TITLE_ONLY", "SECTION_HEADER", "CAPTION_ONLY", "BIG_NUMBER"
 - "insert_after": "current", "end", or a 0-based index number
 - "title": optional title text
 - "body": optional body text
 
-4. Replace text (replace ALL text in an existing element):
+5. Replace text (replace ALL text in an existing element):
 - "action": "replace_text"
 - "objectId": the element's objectId (string)
 - "new_text": the replacement text (string)
 
-5. Update text style (change formatting of ALL text in an existing element):
+6. Update text style (change formatting of ALL text in an existing element):
 - "action": "update_text_style"
 - "objectId": the element's objectId (string)
 - Style fields (include one or more): "font_size_pt", "bold", "italic", "underline", "font_family", "color" (hex)
@@ -336,11 +389,23 @@ Rules:
 - Only include elements you want to change.
 - Be precise with numbers. Think about centering, alignment, and spacing.
 - The slide center X is half the slide width. The slide center Y is half the slide height.
-- For create_text_box: position it to avoid overlapping existing elements. Match the slide's existing font/style when possible.
-- For create_slide: choose a fitting layout. Generate appropriate title/body text for the topic.
+
+Positioning — AVOID OVERLAPS:
+- Before placing a new element, compute the occupied regions from existing elements (each element occupies x to x+width, y to y+height).
+- Place new elements in EMPTY space only. If there's not enough room, resize existing elements or the new element to fit.
+- When user says "at the bottom", place below the lowest existing element with some padding (e.g. 5-10pt gap).
+
+create_shape rules:
+- When user asks to "add a section about X" or "add content about X", ALWAYS include the "text" field with actual content. Never create an empty shape for content requests.
+- Match the slide's existing font/style/colors. Look at existing elements' style and bg: values.
+- Use RECTANGLE or ROUND_RECTANGLE with background_color for card-style sections.
+
+Other rules:
+- For create_line: use for dividers, separators, or connectors.
+- For create_slide: choose a fitting layout. Generate appropriate title/body text.
 - For replace_text: replaces ALL text in the element.
 - For update_text_style: applies to ALL text in the element.
-- You can combine multiple instructions (e.g. create_text_box + move existing elements to make room).
+- You can combine multiple instructions (e.g. create_shape + move existing elements to make room).
 - When matching formatting across slides, use style info from other slides' summaries.
 
 Output format:
@@ -465,17 +530,17 @@ def _create_and_populate_slide(
     return f"Created slide ({layout}) with content"
 
 
-def _create_text_box(
+def _create_shape(
     inst: dict,
     presentation_id: str,
     page_id: str,
     access_token: str,
 ) -> str:
     """
-    Create a text box on the specified slide with optional text and styling.
-    Returns a status message.
+    Create a shape on the specified slide with optional text, fill, border, and text styling.
     """
-    obj_id = _gen_id("txtbox")
+    obj_id = _gen_id("shape")
+    shape_type = inst.get("shape_type", "TEXT_BOX")
     x_pt = inst.get("x_pt", 50)
     y_pt = inst.get("y_pt", 50)
     width_pt = inst.get("width_pt", 400)
@@ -486,7 +551,7 @@ def _create_text_box(
         {
             "createShape": {
                 "objectId": obj_id,
-                "shapeType": "TEXT_BOX",
+                "shapeType": shape_type,
                 "elementProperties": {
                     "pageObjectId": page_id,
                     "size": {
@@ -507,6 +572,40 @@ def _create_text_box(
         }
     ]
 
+    shape_props = {}
+    shape_fields = []
+    if "background_color" in inst:
+        shape_props["shapeBackgroundFill"] = {
+            "solidFill": {
+                "color": {"rgbColor": _hex_to_rgb(inst["background_color"])}
+            }
+        }
+        shape_fields.append("shapeBackgroundFill.solidFill.color")
+    if "border_color" in inst or "border_weight_pt" in inst:
+        outline = {}
+        outline_fields = []
+        if "border_color" in inst:
+            outline["outlineFill"] = {
+                "solidFill": {
+                    "color": {"rgbColor": _hex_to_rgb(inst["border_color"])}
+                }
+            }
+            outline_fields.append("outline.outlineFill.solidFill.color")
+        if "border_weight_pt" in inst:
+            outline["weight"] = {"magnitude": inst["border_weight_pt"], "unit": "PT"}
+            outline_fields.append("outline.weight")
+        shape_props["outline"] = outline
+        shape_fields.extend(outline_fields)
+
+    if shape_props and shape_fields:
+        requests.append({
+            "updateShapeProperties": {
+                "objectId": obj_id,
+                "shapeProperties": shape_props,
+                "fields": ",".join(shape_fields),
+            }
+        })
+
     if text:
         requests.append({
             "insertText": {
@@ -516,41 +615,119 @@ def _create_text_box(
             }
         })
 
-    style = {}
-    fields = []
+    text_style = {}
+    text_fields = []
     if "font_size_pt" in inst:
-        style["fontSize"] = {"magnitude": inst["font_size_pt"], "unit": "PT"}
-        fields.append("fontSize")
+        text_style["fontSize"] = {"magnitude": inst["font_size_pt"], "unit": "PT"}
+        text_fields.append("fontSize")
     if "bold" in inst:
-        style["bold"] = inst["bold"]
-        fields.append("bold")
+        text_style["bold"] = inst["bold"]
+        text_fields.append("bold")
     if "italic" in inst:
-        style["italic"] = inst["italic"]
-        fields.append("italic")
+        text_style["italic"] = inst["italic"]
+        text_fields.append("italic")
     if "underline" in inst:
-        style["underline"] = inst["underline"]
-        fields.append("underline")
+        text_style["underline"] = inst["underline"]
+        text_fields.append("underline")
     if "font_family" in inst:
-        style["fontFamily"] = inst["font_family"]
-        fields.append("fontFamily")
+        text_style["fontFamily"] = inst["font_family"]
+        text_fields.append("fontFamily")
     if "color" in inst:
-        style["foregroundColor"] = {
+        text_style["foregroundColor"] = {
             "opaqueColor": {"rgbColor": _hex_to_rgb(inst["color"])}
         }
-        fields.append("foregroundColor")
+        text_fields.append("foregroundColor")
 
-    if style and fields and text:
+    if text_style and text_fields and text:
         requests.append({
             "updateTextStyle": {
                 "objectId": obj_id,
                 "textRange": {"type": "ALL"},
-                "style": style,
-                "fields": ",".join(fields),
+                "style": text_style,
+                "fields": ",".join(text_fields),
             }
         })
 
     execute_batch_update(presentation_id, requests, access_token)
-    return f"Created text box '{text[:40]}...' at ({x_pt}, {y_pt})" if len(text) > 40 else f"Created text box '{text}' at ({x_pt}, {y_pt})"
+    label = shape_type.lower().replace("_", " ")
+    snippet = f"'{text[:40]}...'" if len(text) > 40 else (f"'{text}'" if text else "(empty)")
+    return f"Created {label} {snippet} at ({x_pt}, {y_pt})"
+
+
+def _create_line(
+    inst: dict,
+    presentation_id: str,
+    page_id: str,
+    access_token: str,
+) -> str:
+    """
+    Create a line on the specified slide.
+    """
+    obj_id = _gen_id("line")
+    line_type = inst.get("line_type", "STRAIGHT")
+    # Line category mapping
+    category_map = {"STRAIGHT": "STRAIGHT", "BENT": "BENT", "CURVED": "CURVED"}
+    category = category_map.get(line_type, "STRAIGHT")
+
+    start_x = inst.get("start_x_pt", 0)
+    start_y = inst.get("start_y_pt", 0)
+    end_x = inst.get("end_x_pt", 100)
+    end_y = inst.get("end_y_pt", 100)
+
+    width_pt = abs(end_x - start_x) or 1
+    height_pt = abs(end_y - start_y) or 1
+    x_pt = min(start_x, end_x)
+    y_pt = min(start_y, end_y)
+
+    requests = [
+        {
+            "createLine": {
+                "objectId": obj_id,
+                "lineCategory": category,
+                "elementProperties": {
+                    "pageObjectId": page_id,
+                    "size": {
+                        "width": {"magnitude": width_pt, "unit": "PT"},
+                        "height": {"magnitude": height_pt, "unit": "PT"},
+                    },
+                    "transform": {
+                        "scaleX": 1,
+                        "scaleY": 1,
+                        "shearX": 0,
+                        "shearY": 0,
+                        "translateX": x_pt * PT_TO_EMU,
+                        "translateY": y_pt * PT_TO_EMU,
+                        "unit": "EMU",
+                    },
+                },
+            }
+        }
+    ]
+
+    line_props = {}
+    line_fields = []
+    if "color" in inst:
+        line_props["lineFill"] = {
+            "solidFill": {
+                "color": {"rgbColor": _hex_to_rgb(inst["color"])}
+            }
+        }
+        line_fields.append("lineFill.solidFill.color")
+    if "weight_pt" in inst:
+        line_props["weight"] = {"magnitude": inst["weight_pt"], "unit": "PT"}
+        line_fields.append("weight")
+
+    if line_props and line_fields:
+        requests.append({
+            "updateLineProperties": {
+                "objectId": obj_id,
+                "lineProperties": line_props,
+                "fields": ",".join(line_fields),
+            }
+        })
+
+    execute_batch_update(presentation_id, requests, access_token)
+    return f"Created {line_type.lower()} line from ({start_x}, {start_y}) to ({end_x}, {end_y})"
 
 
 def _hex_to_rgb(hex_color: str) -> dict:
@@ -581,7 +758,7 @@ def _edit_instructions_to_batch_requests(
     for inst in instructions:
         action = inst.get("action")
 
-        if action in ("create_slide", "create_text_box"):
+        if action in ("create_slide", "create_shape", "create_line"):
             continue
 
         obj_id = inst.get("objectId")
@@ -789,25 +966,43 @@ def handle_edit_slides(
 
     slides_created = 0
     elements_updated = 0
-    textboxes_created = 0
+    shapes_created = 0
 
-    # Handle create_text_box instructions
-    textbox_instructions = [i for i in instructions if i.get("action") == "create_text_box"]
-    for ti in textbox_instructions:
+    # Handle create_shape instructions
+    shape_instructions = [i for i in instructions if i.get("action") == "create_shape"]
+    for si in shape_instructions:
         try:
-            result = _create_text_box(ti, presentation_id, page_id, access_token)
+            result = _create_shape(si, presentation_id, page_id, access_token)
             print(f"   SLIDES: {result}")
-            textboxes_created += 1
+            shapes_created += 1
         except httpx.HTTPStatusError as e:
             error_body = ""
             try:
                 error_body = e.response.text[:300]
             except Exception:
                 pass
-            print(f"   SLIDES: create_text_box failed (HTTP {e.response.status_code}): {error_body}")
-            return f"Failed to create text box (HTTP {e.response.status_code}). Error: {error_body}"
+            print(f"   SLIDES: create_shape failed (HTTP {e.response.status_code}): {error_body}")
+            return f"Failed to create shape (HTTP {e.response.status_code}). Error: {error_body}"
         except Exception as e:
-            return f"Error creating text box: {e}"
+            return f"Error creating shape: {e}"
+
+    # Handle create_line instructions
+    line_instructions = [i for i in instructions if i.get("action") == "create_line"]
+    for li in line_instructions:
+        try:
+            result = _create_line(li, presentation_id, page_id, access_token)
+            print(f"   SLIDES: {result}")
+            shapes_created += 1
+        except httpx.HTTPStatusError as e:
+            error_body = ""
+            try:
+                error_body = e.response.text[:300]
+            except Exception:
+                pass
+            print(f"   SLIDES: create_line failed (HTTP {e.response.status_code}): {error_body}")
+            return f"Failed to create line (HTTP {e.response.status_code}). Error: {error_body}"
+        except Exception as e:
+            return f"Error creating line: {e}"
 
     # Handle create_slide instructions
     create_instructions = [i for i in instructions if i.get("action") == "create_slide"]
@@ -846,14 +1041,14 @@ def handle_edit_slides(
         except Exception as e:
             return f"Error updating elements: {e}"
 
-    if not slides_created and not elements_updated and not textboxes_created:
+    if not slides_created and not elements_updated and not shapes_created:
         if llm_message:
             return llm_message
         return "No valid changes could be generated. Try being more specific."
 
     parts = []
-    if textboxes_created:
-        parts.append(f"added {textboxes_created} text box{'es' if textboxes_created != 1 else ''}")
+    if shapes_created:
+        parts.append(f"added {shapes_created} element{'s' if shapes_created != 1 else ''}")
     if slides_created:
         parts.append(f"created {slides_created} new slide{'s' if slides_created != 1 else ''}")
     if elements_updated:
