@@ -1,6 +1,6 @@
 # Dex2
 
-Dex2 is a Chrome extension plus FastAPI backend. The extension captures screenshots of visited pages, sends them to the backend for text extraction and embedding, and a chat UI queries the backend with RAG (retrieval-augmented generation). The backend uses hybrid retrieval (vector + BM25), returns structured actions (chat, open tab, send email), and the extension executes those actions.
+Dex2 is a Chrome extension plus FastAPI backend. The extension captures screenshots of visited pages, sends them to the backend for text extraction and embedding, and a chat UI queries the backend with RAG (retrieval-augmented generation). The backend uses hybrid retrieval (vector + BM25) and a tool-calling agent: the LLM (OpenAI GPT-4o-mini) chooses among tools (open tab, send email, edit slides) or answers in text. The API returns a single action per request (chat only, open tab, send email, or edit slides), and the extension executes the corresponding action.
 
 ## Architecture
 
@@ -14,8 +14,8 @@ Dex2 is a Chrome extension plus FastAPI backend. The extension captures screensh
 
 ## Project structure
 
-- **backend/** – FastAPI app: embedding pipeline, hybrid retrieval, chat with action orchestration, Google OAuth and Sheets/Docs text extraction.
-- **frontend/** – Chrome extension (Manifest V3): popup chat UI (React), background service worker (screenshots, Google token storage), and tools (open tab, open Gmail compose).
+- **backend/** – FastAPI app: embedding pipeline, hybrid retrieval, chat with tool-calling agent (open_tab, send_email, edit_slides), Google OAuth and Sheets/Docs/Slides integration.
+- **frontend/** – Chrome extension (Manifest V3): popup chat UI (React), background service worker (screenshots, Google token storage), and tools (open tab, open Gmail compose, edit slides).
 
 ---
 
@@ -38,20 +38,20 @@ Scores are merged with configurable weights:
 
 All three values are configurable via environment variables in `langchain_agent.py` (or by passing `vector_weight`, `text_weight`, `min_score` into `retrieve_documents`).
 
-### Action orchestration
+### Tool-calling agent and context
 
-Chat is RAG plus structured output:
+Chat uses RAG plus a single-round tool-calling flow:
 
-1. **Retrieve** – The user message is used as the retrieval query. Hybrid retrieval returns top-k chunks (default k=4) from MongoDB, filtered by the user's Supabase token. Chunks are formatted into a single context string.
+1. **Context** – The prompt is built from: (a) retrieved chunks from hybrid search (top-k, default k=4, user-scoped by Supabase token), (b) the user message, (c) the current browser tab URL (when provided), (d) conversation history, and (e) current time. This acts as a context composer so the LLM can choose tools or answer using the right information.
 
-2. **Prompt** – A system prompt tells the LLM (OpenAI GPT-4o-mini) to answer using the context and to respond with JSON: `action` plus `msg`, and for `send_email` also `email_to`, `email_subject`, `email_body`. Action rules:
-   - **open_tab** – User asks to open a URL or go somewhere; the LLM must put the URL in `msg` so the client can open it.
-   - **send_email** – User asks to compose/send an email; the LLM must fill the email fields so the client can open a Gmail draft.
-   - **chat_only** – All other replies (Q&A, explanations).
+2. **Tools** – The LLM (OpenAI GPT-4o-mini via `langchain-openai`) is given three tools via `bind_tools`:
+   - **open_tab** – When the user wants to open a URL or search; parameters: `url` (required), optional `message`. The backend returns `action: "open_tab"` and `msg` containing the message and URL so the frontend can open the tab.
+   - **send_email** – When the user wants to compose/send an email; parameters: `email_to`, `email_subject`, `email_body`. The backend builds a Gmail compose URL and returns `action: "send_email"`, `msg`, and `email_url`.
+   - **edit_slides** – When the user is on a Google Slides tab (URL contains `docs.google.com/presentation`) and asks to modify or query the presentation; no parameters. The backend calls the slides orchestrator with the current tab URL, user message, and Google access token, then returns `action: "edit_slides"` and `msg` with the result.
 
-3. **Parse** – The backend extracts JSON from the LLM response (regex fallback if wrapped in text), maps `action` to the enum (`chat_only`, `open_tab`, `send_email`), and for `send_email` builds a Gmail compose URL from the email fields.
+3. **Single round** – One LLM invocation per request. If the model returns tool calls, the backend executes only the first tool (since the frontend supports one action per response), maps it to the response enum, and returns. If the model responds with text only, the backend returns `action: "chat_only"` and the model’s message.
 
-4. **Respond** – The API returns `ChatResponse`: `action`, `msg`, and optionally `email_url`. The frontend displays `msg` and, depending on `action`, calls `openTabFromMessage(msg)` (open tab), `openEmailCompose(email_url)` (open Gmail), or does nothing extra (chat only).
+4. **Respond** – The API returns `ChatResponse`: `action` (`chat_only`, `open_tab`, `send_email`, or `edit_slides`), `msg`, and optionally `email_url`. The frontend displays `msg` and, depending on `action`, opens a tab from `msg`, opens Gmail compose with `email_url`, handles edit_slides (e.g. show result or open Slides), or shows the message only.
 
 ### API endpoints
 
@@ -60,7 +60,7 @@ Chat is RAG plus structured output:
 | GET | `/` | Root; returns status. |
 | GET | `/health` | Health check. |
 | GET | `/api/items/{item_id}` | Example item (optional `q`). |
-| POST | `/chat` | Chat with RAG. Body: `{ "message": string, "conversation_history": [{ "role", "content" }] }`. Header: `Authorization: Bearer <supabase_jwt>`. Returns: `{ "action": "chat_only" \| "open_tab" \| "send_email", "msg": string, "email_url": string \| null }`. |
+| POST | `/chat` | Chat with RAG and tool-calling. Body: `{ "message": string, "conversation_history": [{ "role", "content" }], "current_tab_url": string \| null }`. Headers: `Authorization: Bearer <supabase_jwt>`, optional `X-Google-Access-Token` (for edit_slides). Returns: `{ "action": "chat_only" \| "open_tab" \| "send_email" \| "edit_slides", "msg": string, "email_url": string \| null }`. |
 | POST | `/api/embed-screenshot/` | Accept screenshot and URL; extract text, then enqueue embedding. Body: `ScreenshotRequest` (source_url, captured_at, title?, screenshot_data). Headers: `Authorization: Bearer <supabase_jwt>`, optional `X-Google-Access-Token` for Google Sheets/Docs. Returns 200 with status; 400 if text extraction fails. URLs under `accounts.google.com` are skipped (not embedded). |
 | POST | `/api/google-auth/code` | Exchange OAuth code for tokens. Body: `{ "code", "redirect_uri" }`. Returns `{ "access_token", "refresh_token", "expires_in" }`. |
 | POST | `/api/google-auth/refresh` | Refresh access token. Body: `{ "refresh_token" }`. Returns `{ "access_token", "expires_in" }`. |
@@ -83,7 +83,7 @@ Chat is RAG plus structured output:
 
 ### Action handling in the popup
 
-After each chat response, the frontend reads `action` and `msg` (and `email_url` for send_email). If `action === "open_tab"`, it calls `openTabFromMessage(msg)`. If `action === "send_email"` and `email_url` is present, it calls `openEmailCompose(email_url)`. Otherwise it only shows the message (chat only).
+After each chat response, the frontend reads `action`, `msg`, and optionally `email_url`. If `action === "open_tab"`, it calls `openTabFromMessage(msg)`. If `action === "send_email"` and `email_url` is present, it calls `openEmailCompose(email_url)`. If `action === "edit_slides"`, it shows the slides result in `msg` (and may open or focus the Slides tab as needed). Otherwise it only shows the message (chat only).
 
 ### Frontend setup
 
@@ -100,4 +100,4 @@ To embed content from Google Sheets or Docs, the user clicks "Connect Google" in
 1. Start the backend from `backend/`: `uvicorn main:app --reload` (or `python main.py`).
 2. Build the frontend from `frontend/`: `npm run build`.
 3. In Chrome, load the unpacked extension from `frontend/dist`.
-4. Open the extension popup, sign in (Supabase), optionally Connect Google, and use the chat. Visiting pages will capture screenshots and send them to the backend for embedding; chat uses hybrid retrieval over those embeddings and returns actions the extension can execute.
+4. Open the extension popup, sign in (Supabase), optionally Connect Google, and use the chat. Visiting pages will capture screenshots and send them to the backend for embedding; chat uses hybrid retrieval and the tool-calling agent to return one action per request (chat only, open tab, send email, or edit slides) that the extension can execute.

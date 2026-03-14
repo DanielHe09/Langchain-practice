@@ -24,6 +24,49 @@ from slides import handle_edit_slides
 
 load_dotenv()
 
+# Tool definitions for the main agent (tool calling)
+MAIN_AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "open_tab",
+            "description": "Open a new browser tab with the given URL. Use when the user wants to open a website, search for something, or go to a URL (e.g. 'open YouTube', 'go to github.com').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full URL to open (must start with https:// or http://)"},
+                    "message": {"type": "string", "description": "Short user-facing message, e.g. 'Opening YouTube for you.'"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Draft an email for the user. Use when the user explicitly wants to send, compose, or draft an email (e.g. 'send an email to John', 'email my team'). Do NOT use for general questions about email.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email_to": {"type": "string", "description": "Recipient email address"},
+                    "email_subject": {"type": "string", "description": "Subject line"},
+                    "email_body": {"type": "string", "description": "Body text of the email"},
+                },
+                "required": ["email_to", "email_subject", "email_body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_slides",
+            "description": "Edit or query the user's Google Slides presentation. Use when the user is on a Google Slides tab (current tab URL contains docs.google.com/presentation) and asks to modify slides, add content, create a slide, change formatting, or ask about the presentation.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
 app = FastAPI(title="FastAPI Server", version="1.0.0")
 
 # Add CORS middleware
@@ -487,129 +530,99 @@ async def chat(
 
         # Step 1: Retrieve relevant context from vector store (filtered by user token)
         context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
-        
-        # Step 2: Build the prompt with context
-        # System message that instructs the agent to use the retrieved context and return structured output
-        system_prompt = """You are a helpful assistant that answers questions based on the provided context from a knowledge base.
 
-When responding, you MUST return your response in the following JSON format.
-For "chat_only" or "open_tab": { "action": "chat_only" or "open_tab", "msg": "your response message here" }
-For "send_email": { "action": "send_email", "msg": "brief confirmation for the user", "email_to": "recipient@example.com", "email_subject": "Subject line", "email_body": "Draft body text" }
+        # Step 2: Build system and user messages
+        system_prompt = """You are a helpful assistant with access to tools and context from a knowledge base.
 
-Action rules:
-- Use "open_tab" if the user's query requires opening a new browser tab or webpage (e.g., "open YouTube", "search for Python tutorials", "go to github.com")
-- When using "open_tab", you MUST include the full URL to open in the "msg" field (e.g. "Opening https://www.wikipedia.org for you." or "Here is the link: https://youtube.com") so the client can open it. Never use "open_tab" with a msg that does not contain a literal https:// or http:// URL.
-- Use "send_email" when the user explicitly wants to send, compose, or draft an email (e.g., "send an email to John", "email my team about the meeting", "compose an email to support@example.com"). When using "send_email" you MUST also include "email_to", "email_subject", and "email_body" in the JSON so the client can open a Gmail draft. Do NOT use "send_email" for general questions about email—only when the user wants to actually send one.
-- Use "edit_slides" when the user is currently on a Google Slides tab (the current tab URL contains docs.google.com/presentation) AND asks to modify slide layout, alignment, symmetry, positioning, text content, text formatting, create a new slide, generate slide content, OR asks questions about the presentation's content, formatting, fonts, colors, or structure. Put a brief description of what you will do in "msg" (e.g., "Making the text boxes symmetrical on this slide." or "Checking the font styles across your slides.").
-- Use "chat_only" for all other queries (answering questions, explanations, general conversation)
+When the user asks something that requires an action, use the appropriate tool:
+- open_tab: when they want to open a website, search, or go to a URL. Always pass the full URL (https:// or http://).
+- send_email: when they explicitly want to send, compose, or draft an email. Pass email_to, email_subject, email_body.
+- edit_slides: when they are on a Google Slides tab (current tab URL contains docs.google.com/presentation) and ask to modify slides, add content, create a slide, change formatting, or ask about the presentation.
 
-When answering:
-- Use the retrieved context to provide accurate, detailed answers
-- If the context contains relevant information, cite it in your response
-- If the context doesn't contain enough information to answer the question, say so
-- You can also use your general knowledge, but prioritize the provided context
-- Be concise but thorough
-- Always return valid JSON with both "action" and "msg" fields"""
-        
+When no tool is needed (general questions, explanations), respond with your answer in text. Use the provided context from the knowledge base when relevant. Be concise but thorough."""
+
         messages = [SystemMessage(content=system_prompt)]
-        
-        # Add conversation history
         for msg in conversation_history:
             if msg.role == "user":
                 messages.append(HumanMessage(content=msg.content))
             elif msg.role == "assistant":
                 messages.append(AIMessage(content=msg.content))
-        
-        # Add current user message with context
-        tab_context = f"\n            The user's current browser tab URL is: {current_tab_url}" if current_tab_url else ""
+
+        tab_context = f"\nThe user's current browser tab URL is: {current_tab_url}" if current_tab_url else ""
         user_prompt = f"""Context from knowledge base:
-            {context}
+{context}
 
-            User question: {user_message}{tab_context}
+User question: {user_message}{tab_context}
 
-            The current time of the user request is: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Current time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-            Please answer the user's question using the context above when available."""
-        
+Answer or use a tool as appropriate."""
         messages.append(HumanMessage(content=user_prompt))
-        
-        # Step 3: Get response from LLM (the "agent")
-        response = llm.invoke(messages)
-        response_text = response.content if hasattr(response, 'content') else str(response)
-        
-        # Step 4: Parse structured response from LLM
-        # Try to extract JSON from the response
-        action = ActionType.CHAT_ONLY  # Default action
-        msg = response_text  # Default message
+
+        # Step 3: Single round of tool calling (frontend supports one action per response)
+        llm_with_tools = llm.bind_tools(MAIN_AGENT_TOOLS)
+        action = ActionType.CHAT_ONLY
+        msg = ""
         email_url = None
+        tool_name = None
+        tool_result = None
 
-        try:
-            # Try to find JSON in the response (handles cases where LLM adds extra text)
-            json_match = re.search(r'\{[^{}]*"action"[^{}]*"msg"[^{}]*\}', response_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-                action_str = parsed.get("action", "chat_only").lower()
-                msg = parsed.get("msg", response_text)
+        response = llm_with_tools.invoke(messages)
+        tool_calls = getattr(response, "tool_calls", None) or []
 
-                # Validate and set action
-                if action_str == "open_tab":
-                    action = ActionType.OPEN_TAB
-                elif action_str == "send_email":
-                    action = ActionType.SEND_EMAIL
-                elif action_str == "edit_slides":
-                    action = ActionType.EDIT_SLIDES
-                else:
-                    action = ActionType.CHAT_ONLY
+        if not tool_calls:
+            msg = response.content if hasattr(response, "content") and response.content else ""
+        else:
+            # Use only the first tool so we return one clear action
+            tc = tool_calls[0]
+            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+            args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {}) or {}
+
+            if name == "open_tab":
+                url = (args.get("url") or "").strip()
+                user_msg = (args.get("message") or f"Opening {url}").strip()
+                tool_result = f"{user_msg}\n{url}" if url else "No URL provided."
+                tool_name = "open_tab"
+            elif name == "send_email":
+                to = (args.get("email_to") or "").strip()
+                subj = (args.get("email_subject") or "").strip()
+                body = (args.get("email_body") or "").strip()
+                if len(body) > 1500:
+                    body = body[:1500] + "..."
+                tool_result = f"Drafted email to {to}: {subj}"
+                tool_name = "send_email"
+                email_url = "https://mail.google.com/mail/?view=cm&fs=1&" + urlencode({
+                    "to": to, "su": subj, "body": body,
+                })
+            elif name == "edit_slides":
+                tool_result = handle_edit_slides(current_tab_url, user_message, google_token)
+                tool_name = "edit_slides"
             else:
-                # If no JSON found, try parsing the entire response as JSON
-                parsed = json.loads(response_text)
-                action_str = parsed.get("action", "chat_only").lower()
-                msg = parsed.get("msg", response_text)
+                tool_result = "Unknown tool."
+                tool_name = None
 
-                if action_str == "open_tab":
-                    action = ActionType.OPEN_TAB
-                elif action_str == "send_email":
-                    action = ActionType.SEND_EMAIL
-                elif action_str == "edit_slides":
-                    action = ActionType.EDIT_SLIDES
-                else:
-                    action = ActionType.CHAT_ONLY
+        # Step 4: Map to ChatResponse for the frontend
+        if tool_name == "open_tab":
+            action = ActionType.OPEN_TAB
+            msg = tool_result or msg or ""
+        elif tool_name == "send_email":
+            action = ActionType.SEND_EMAIL
+            msg = tool_result or msg or "Email draft ready."
+        elif tool_name == "edit_slides":
+            action = ActionType.EDIT_SLIDES
+            msg = tool_result or msg
+        else:
+            if not msg and tool_result:
+                msg = tool_result
 
-            # Build Gmail compose URL when action is send_email
-            if action == ActionType.SEND_EMAIL:
-                email_to = (parsed.get("email_to") or "").strip()
-                email_subject = (parsed.get("email_subject") or "").strip()
-                email_body = (parsed.get("email_body") or "").strip()
-                # Truncate body to avoid URL length limits (~2000 chars safe)
-                max_body_len = 1500
-                if len(email_body) > max_body_len:
-                    email_body = email_body[:max_body_len] + "..."
-                if email_to or email_subject or email_body:
-                    email_url = "https://mail.google.com/mail/?view=cm&fs=1&" + urlencode({
-                        "to": email_to,
-                        "su": email_subject,
-                        "body": email_body,
-                    })
-        except (json.JSONDecodeError, KeyError, AttributeError) as e:
-            # If JSON parsing fails, use the raw response as message with default action
-            print(f"DEBUG: Failed to parse structured response, using default: {str(e)}")
-            print(f"   Raw response: {response_text[:200]}...")
-            msg = response_text
-            action = ActionType.CHAT_ONLY
+        if not msg:
+            msg = "I'm not sure how to help with that."
 
-        # When action is edit_slides, execute the slides module
-        if action == ActionType.EDIT_SLIDES:
-            slides_result = handle_edit_slides(current_tab_url, user_message, google_token)
-            msg = slides_result
-
-        # Debug: log action and, for open_tab/send_email, the message content
         print(f"   Action: {action.value}")
         if action == ActionType.OPEN_TAB:
             print(f"   OPEN_TAB: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
         if action == ActionType.SEND_EMAIL:
-            print(f"   SEND_EMAIL: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
-            if email_url:
-                print(f"   SEND_EMAIL: email_url generated")
+            print(f"   SEND_EMAIL: email_url generated" if email_url else "   SEND_EMAIL: no email_url")
         if action == ActionType.EDIT_SLIDES:
             print(f"   EDIT_SLIDES: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
 

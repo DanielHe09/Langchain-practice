@@ -4,7 +4,7 @@ import numpy as np
 import google.generativeai as genai
 from mongo_client import get_embeddings_collection
 from dotenv import load_dotenv
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from rank_bm25 import BM25Okapi
 
 load_dotenv()
