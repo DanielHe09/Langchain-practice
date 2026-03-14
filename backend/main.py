@@ -20,7 +20,7 @@ from enum import Enum
 import json
 import re
 from urllib.parse import urlencode
-from slides_module import handle_edit_slides
+from slides import handle_edit_slides
 
 load_dotenv()
 
