@@ -20,6 +20,7 @@ from enum import Enum
 import json
 import re
 from urllib.parse import urlencode
+from slides_module import handle_edit_slides
 
 load_dotenv()
 
@@ -456,7 +457,8 @@ def retrieve_context(query: str, k: int = 4, supabase_token: str = None) -> str:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    x_google_access_token: Optional[str] = Header(None, alias="X-Google-Access-Token"),
 ):
     """
     Chat endpoint that uses Claude agent with RAG (Retrieval Augmented Generation)
@@ -479,7 +481,9 @@ async def chat(
         if authorization and authorization.startswith("Bearer "):
             supabase_token = authorization.split(" ")[1]
         
-        print(f"DEBUG: Chat request - Token present: {bool(supabase_token)}")
+        google_token = (x_google_access_token or "").strip() or None
+        current_tab_url = (request.current_tab_url or "").strip() or None
+        print(f"DEBUG: Chat request - Token present: {bool(supabase_token)}, Google token: {bool(google_token)}, Tab URL: {current_tab_url}")
 
         # Step 1: Retrieve relevant context from vector store (filtered by user token)
         context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
@@ -496,6 +500,7 @@ Action rules:
 - Use "open_tab" if the user's query requires opening a new browser tab or webpage (e.g., "open YouTube", "search for Python tutorials", "go to github.com")
 - When using "open_tab", you MUST include the full URL to open in the "msg" field (e.g. "Opening https://www.wikipedia.org for you." or "Here is the link: https://youtube.com") so the client can open it. Never use "open_tab" with a msg that does not contain a literal https:// or http:// URL.
 - Use "send_email" when the user explicitly wants to send, compose, or draft an email (e.g., "send an email to John", "email my team about the meeting", "compose an email to support@example.com"). When using "send_email" you MUST also include "email_to", "email_subject", and "email_body" in the JSON so the client can open a Gmail draft. Do NOT use "send_email" for general questions about email—only when the user wants to actually send one.
+- Use "edit_slides" when the user is currently on a Google Slides tab (the current tab URL contains docs.google.com/presentation) AND asks to modify slide layout, alignment, symmetry, positioning, or create/edit slide content. Put a brief description of what you will do in "msg" (e.g., "Making the text boxes symmetrical on this slide.").
 - Use "chat_only" for all other queries (answering questions, explanations, general conversation)
 
 When answering:
@@ -516,10 +521,11 @@ When answering:
                 messages.append(AIMessage(content=msg.content))
         
         # Add current user message with context
+        tab_context = f"\n            The user's current browser tab URL is: {current_tab_url}" if current_tab_url else ""
         user_prompt = f"""Context from knowledge base:
             {context}
 
-            User question: {user_message}
+            User question: {user_message}{tab_context}
 
             The current time of the user request is: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
@@ -550,6 +556,8 @@ When answering:
                     action = ActionType.OPEN_TAB
                 elif action_str == "send_email":
                     action = ActionType.SEND_EMAIL
+                elif action_str == "edit_slides":
+                    action = ActionType.EDIT_SLIDES
                 else:
                     action = ActionType.CHAT_ONLY
             else:
@@ -562,6 +570,8 @@ When answering:
                     action = ActionType.OPEN_TAB
                 elif action_str == "send_email":
                     action = ActionType.SEND_EMAIL
+                elif action_str == "edit_slides":
+                    action = ActionType.EDIT_SLIDES
                 else:
                     action = ActionType.CHAT_ONLY
 
@@ -587,6 +597,11 @@ When answering:
             msg = response_text
             action = ActionType.CHAT_ONLY
 
+        # When action is edit_slides, execute the slides module
+        if action == ActionType.EDIT_SLIDES:
+            slides_result = handle_edit_slides(current_tab_url, user_message, google_token)
+            msg = slides_result
+
         # Debug: log action and, for open_tab/send_email, the message content
         print(f"   Action: {action.value}")
         if action == ActionType.OPEN_TAB:
@@ -595,6 +610,8 @@ When answering:
             print(f"   SEND_EMAIL: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
             if email_url:
                 print(f"   SEND_EMAIL: email_url generated")
+        if action == ActionType.EDIT_SLIDES:
+            print(f"   EDIT_SLIDES: msg (first 300 chars): {msg[:300] if msg else '(empty)'}")
 
         return ChatResponse(action=action, msg=msg, email_url=email_url)
     
