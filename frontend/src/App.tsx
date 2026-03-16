@@ -112,11 +112,29 @@ function Chatbot({ signOut }: ChatbotProps) {
 
       // Get active tab URL for context (e.g. Google Slides editing)
       let currentTabUrl: string | undefined
+      let currentSlideScreenshot: string | null = null
       const c = typeof chrome !== 'undefined' ? chrome : (window as any).chrome
       if (c?.tabs?.query) {
         try {
           const [tab] = await c.tabs.query({ active: true, currentWindow: true })
           currentTabUrl = tab?.url
+          // When on Google Slides, capture current slide for vision-based style extraction
+          if (tab?.url?.includes('docs.google.com/presentation') && tab?.windowId != null) {
+            try {
+              const captureRes = await c.runtime.sendMessage({
+                type: 'CAPTURE_TAB',
+                windowId: tab.windowId,
+              })
+              if (captureRes?.success && captureRes?.base64) {
+                currentSlideScreenshot = captureRes.base64
+                console.log('[Chat] Sending slide screenshot for style extraction, size:', captureRes.base64.length, 'chars')
+              } else if (captureRes?.error) {
+                console.warn('[Chat] Slide capture failed:', captureRes.error)
+              }
+            } catch (e) {
+              console.warn('[Chat] Slide capture error:', e)
+            }
+          }
         } catch (_) {}
       }
 
@@ -135,6 +153,7 @@ function Chatbot({ signOut }: ChatbotProps) {
           message: message,
           conversation_history: conversationHistory,
           current_tab_url: currentTabUrl ?? null,
+          current_slide_screenshot: currentSlideScreenshot,
         })
       })
 

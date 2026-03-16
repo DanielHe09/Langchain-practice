@@ -7,34 +7,57 @@ const API_URL = 'http://localhost:8000'
 // Handle Connect Google: exchange code for tokens and store in chrome.storage (so tokens persist when popup closes)
 chrome.runtime.onMessage.addListener(
   (
-    msg: { type: string; code?: string; redirect_uri?: string },
+    msg: { type: string; code?: string; redirect_uri?: string; windowId?: number },
     _sender: chrome.runtime.MessageSender,
-    sendResponse: (response: { success: boolean; error?: string }) => void
+    sendResponse: (response: { success: boolean; error?: string; base64?: string }) => void
   ) => {
-    if (msg.type !== 'GOOGLE_AUTH_SAVE' || !msg.code || !msg.redirect_uri) {
-      sendResponse({ success: false, error: 'Missing code or redirect_uri' })
+    if (msg.type === 'GOOGLE_AUTH_SAVE') {
+      if (!msg.code || !msg.redirect_uri) {
+        sendResponse({ success: false, error: 'Missing code or redirect_uri' })
+        return true
+      }
+      ;(async () => {
+        try {
+          const res = await fetch(`${API_URL}/api/google-auth/code`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: msg.code, redirect_uri: msg.redirect_uri }),
+          })
+          if (!res.ok) throw new Error(await res.text())
+          const data = await res.json()
+          await setGoogleTokens(
+            data.access_token,
+            data.refresh_token ?? null,
+            data.expires_in ?? 3600
+          )
+          sendResponse({ success: true })
+        } catch (e: any) {
+          sendResponse({ success: false, error: e?.message || String(e) })
+        }
+      })()
       return true
     }
-    ;(async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/google-auth/code`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: msg.code, redirect_uri: msg.redirect_uri }),
-        })
-        if (!res.ok) throw new Error(await res.text())
-        const data = await res.json()
-        await setGoogleTokens(
-          data.access_token,
-          data.refresh_token ?? null,
-          data.expires_in ?? 3600
-        )
-        sendResponse({ success: true })
-      } catch (e: any) {
-        sendResponse({ success: false, error: e?.message || String(e) })
+    if (msg.type === 'CAPTURE_TAB') {
+      const windowId = msg.windowId
+      if (windowId == null) {
+        sendResponse({ success: false, error: 'Missing windowId' })
+        return false
       }
-    })()
-    return true // keep channel open for async sendResponse
+      ;(async () => {
+        try {
+          const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+            format: 'png',
+            quality: 100,
+          })
+          const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+          sendResponse({ success: true, base64 })
+        } catch (e: any) {
+          sendResponse({ success: false, error: e?.message || String(e) })
+        }
+      })()
+      return true
+    }
+    return false
   }
 )
 

@@ -15,6 +15,7 @@ from .context import (
     build_full_presentation_context, extract_presentation_style,
     get_presentation_style_values,
 )
+from . import vision_style
 from .router import build_router_context, route_request
 from .executors import (
     ANSWER_QUESTION_PROMPT, CREATE_CONTENT_PROMPT, CREATE_SLIDE_PROMPT,
@@ -28,6 +29,7 @@ def handle_edit_slides(
     current_tab_url: Optional[str],
     user_message: str,
     access_token: Optional[str],
+    slide_screenshot: Optional[str] = None,
 ) -> str:
     """
     Two-step orchestrator:
@@ -100,6 +102,7 @@ def handle_edit_slides(
             presentation, full_desc, user_message,
             presentation_id, access_token,
             page_w_pt, page_h_pt, current_slide_index, total_slides,
+            slide_screenshot=slide_screenshot,
         )
 
     elif operation == "edit_text":
@@ -118,7 +121,12 @@ def handle_edit_slides(
     print(f"   SLIDES: {len(instructions)} instructions from executor")
 
     instructions = prepare_instructions_for_apply(instructions, page_w_pt, page_h_pt)
-    style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    if slide_screenshot:
+        style_values = vision_style.extract_style_from_slide_image(slide_screenshot) or {}
+        if not style_values:
+            style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    else:
+        style_values = get_presentation_style_values(presentation, presentation_id, access_token)
     instructions = normalize_instructions_style(instructions, style_values)
 
     sc, eu, err = apply_instructions(
@@ -149,6 +157,7 @@ def _handle_create_slide(
     presentation_id: str, access_token: str,
     page_w_pt: float, page_h_pt: float,
     current_slide_index: Optional[int], total_slides: int,
+    slide_screenshot: Optional[str] = None,
 ) -> str:
     """Handle the create_slide operation: create BLANK slide, populate with styled shapes."""
     style_info = extract_presentation_style(presentation)
@@ -179,7 +188,12 @@ def _handle_create_slide(
         return f"Failed to create slide (HTTP {e.response.status_code}). Error: {body}"
 
     instructions = prepare_instructions_for_apply(instructions, page_w_pt, page_h_pt)
-    style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    if slide_screenshot:
+        style_values = vision_style.extract_style_from_slide_image(slide_screenshot) or {}
+        if not style_values:
+            style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    else:
+        style_values = get_presentation_style_values(presentation, presentation_id, access_token)
     instructions = normalize_instructions_style(instructions, style_values)
     empty_page = {"pageElements": []}
     sc, _, err = apply_instructions(

@@ -108,6 +108,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: Optional[List[Message]] = []
     current_tab_url: Optional[str] = None
+    current_slide_screenshot: Optional[str] = None  # Base64 image (or data URL) for vision-based style
 
 
 class ActionType(str, Enum):
@@ -526,7 +527,7 @@ async def chat(
         
         google_token = (x_google_access_token or "").strip() or None
         current_tab_url = (request.current_tab_url or "").strip() or None
-        print(f"DEBUG: Chat request - Token present: {bool(supabase_token)}, Google token: {bool(google_token)}, Tab URL: {current_tab_url}")
+        print(f"DEBUG: Chat request - Token present: {bool(supabase_token)}, Google token: {bool(google_token)}, Tab URL: {current_tab_url}, current_slide_screenshot: {len(request.current_slide_screenshot or '')} chars")
 
         # Step 1: Retrieve relevant context from vector store (filtered by user token)
         context = retrieve_context(user_message, k=4, supabase_token=supabase_token)
@@ -595,7 +596,10 @@ Answer or use a tool as appropriate."""
                     "to": to, "su": subj, "body": body,
                 })
             elif name == "edit_slides":
-                tool_result = handle_edit_slides(current_tab_url, user_message, google_token)
+                tool_result = handle_edit_slides(
+                    current_tab_url, user_message, google_token,
+                    slide_screenshot=request.current_slide_screenshot,
+                )
                 tool_name = "edit_slides"
             else:
                 tool_result = "Unknown tool."
