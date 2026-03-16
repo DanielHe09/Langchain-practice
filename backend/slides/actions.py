@@ -14,7 +14,12 @@ def create_shape(
 ) -> str:
     """Create a shape on the specified slide with optional text, fill, border, and styling."""
     obj_id = gen_id("shape")
-    shape_type = inst.get("shape_type", "TEXT_BOX")
+    shape_type = (inst.get("shape_type", "TEXT_BOX") or "TEXT_BOX").strip().upper()
+    # Slides createShape does not support media types like IMAGE/VIDEO/TABLE as shape_type.
+    # Coerce invalid media-like types to TEXT_BOX to avoid hard failures.
+    if shape_type in {"IMAGE", "VIDEO", "TABLE", "CHART"}:
+        print(f"   CREATE_SHAPE: invalid shape_type={shape_type!r}; coercing to 'TEXT_BOX'")
+        shape_type = "TEXT_BOX"
     x_pt = inst.get("x_pt", 50)
     y_pt = inst.get("y_pt", 50)
     width_pt = inst.get("width_pt", 400)
@@ -43,28 +48,27 @@ def create_shape(
         }
     ]
 
+    # Always set fill and outline when we have values (normalize_instructions_style sets these)
+    bg_color = inst.get("background_color") or "#ffffff"
+    border_color = inst.get("border_color") or "#000000"
+    border_weight_pt = (inst.get("border_weight_pt") or 0) or 1
     shape_props = {}
     shape_fields = []
-    if "background_color" in inst:
-        shape_props["shapeBackgroundFill"] = {
-            "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["background_color"])}}
-        }
-        shape_fields.append("shapeBackgroundFill.solidFill.color")
-    if "border_color" in inst or (inst.get("border_weight_pt", 0) or 0) > 0:
-        outline = {}
-        outline_fields = []
-        if "border_color" in inst:
-            outline["outlineFill"] = {
-                "solidFill": {"color": {"rgbColor": hex_to_rgb(inst["border_color"])}}
-            }
-            outline_fields.append("outline.outlineFill.solidFill.color")
-        weight_pt = inst.get("border_weight_pt") or 0
-        if weight_pt > 0:
-            outline["weight"] = {"magnitude": weight_pt, "unit": "PT"}
-            outline_fields.append("outline.weight")
-        if outline:
-            shape_props["outline"] = outline
-            shape_fields.extend(outline_fields)
+    shape_props["shapeBackgroundFill"] = {
+        "solidFill": {"color": {"rgbColor": hex_to_rgb(bg_color)}}
+    }
+    shape_fields.append("shapeBackgroundFill.solidFill.color")
+    outline = {}
+    outline_fields = []
+    outline["outlineFill"] = {
+        "solidFill": {"color": {"rgbColor": hex_to_rgb(border_color)}}
+    }
+    outline_fields.append("outline.outlineFill.solidFill.color")
+    outline["weight"] = {"magnitude": border_weight_pt, "unit": "PT"}
+    outline_fields.append("outline.weight")
+    shape_props["outline"] = outline
+    shape_fields.extend(outline_fields)
+    print(f"   CREATE_SHAPE: fill={bg_color!r} border={border_color!r} weight_pt={border_weight_pt}")
     if shape_props and shape_fields:
         requests.append({
             "updateShapeProperties": {
@@ -79,6 +83,9 @@ def create_shape(
             "insertText": {"objectId": obj_id, "text": text, "insertionIndex": 0}
         })
 
+    # Always apply text color and font when there is text (force deck style or defaults)
+    text_color = inst.get("color") or "#000000"
+    font_family = inst.get("font_family") or "Arial"
     text_style = {}
     text_fields = []
     if "font_size_pt" in inst:
@@ -93,15 +100,14 @@ def create_shape(
     if "underline" in inst:
         text_style["underline"] = inst["underline"]
         text_fields.append("underline")
-    if "font_family" in inst:
-        text_style["fontFamily"] = inst["font_family"]
-        text_fields.append("fontFamily")
-    if "color" in inst:
-        text_style["foregroundColor"] = {
-            "opaqueColor": {"rgbColor": hex_to_rgb(inst["color"])}
-        }
-        text_fields.append("foregroundColor")
-    if text_style and text_fields and text:
+    text_style["fontFamily"] = font_family
+    text_fields.append("fontFamily")
+    text_style["foregroundColor"] = {
+        "opaqueColor": {"rgbColor": hex_to_rgb(text_color)}
+    }
+    text_fields.append("foregroundColor")
+    if text:
+        print(f"   CREATE_SHAPE: applying text style font_family={font_family!r} color={text_color!r}")
         requests.append({
             "updateTextStyle": {
                 "objectId": obj_id,

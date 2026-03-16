@@ -13,6 +13,7 @@ from .api import (
 )
 from .context import (
     build_full_presentation_context, extract_presentation_style,
+    get_presentation_style_values,
 )
 from .router import build_router_context, route_request
 from .executors import (
@@ -20,6 +21,7 @@ from .executors import (
     EDIT_LAYOUT_PROMPT, EDIT_TEXT_PROMPT, call_executor,
 )
 from .actions import apply_instructions
+from .layout import prepare_instructions_for_apply, normalize_instructions_style
 
 
 def handle_edit_slides(
@@ -115,6 +117,10 @@ def handle_edit_slides(
 
     print(f"   SLIDES: {len(instructions)} instructions from executor")
 
+    instructions = prepare_instructions_for_apply(instructions, page_w_pt, page_h_pt)
+    style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    instructions = normalize_instructions_style(instructions, style_values)
+
     sc, eu, err = apply_instructions(
         instructions, presentation_id, page_id, page_json, access_token,
     )
@@ -172,6 +178,9 @@ def _handle_create_slide(
         body = e.response.text[:300] if e.response else ""
         return f"Failed to create slide (HTTP {e.response.status_code}). Error: {body}"
 
+    instructions = prepare_instructions_for_apply(instructions, page_w_pt, page_h_pt)
+    style_values = get_presentation_style_values(presentation, presentation_id, access_token)
+    instructions = normalize_instructions_style(instructions, style_values)
     empty_page = {"pageElements": []}
     sc, _, err = apply_instructions(
         instructions, presentation_id, slide_id, empty_page, access_token,

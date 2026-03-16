@@ -30,17 +30,32 @@ Rules:
 CREATE_CONTENT_PROMPT = """You add new shapes, text boxes, and lines to a Google Slides slide. Output a JSON object:
 {"instructions": [...], "message": "brief summary"}
 
-Shape instruction:
+Shape instruction (with coordinates):
 {"action": "create_shape", "shape_type": "TEXT_BOX"|"RECTANGLE"|"ROUND_RECTANGLE"|"ELLIPSE"|"TRIANGLE"|etc., "x_pt": ..., "y_pt": ..., "width_pt": ..., "height_pt": ..., "text": "...", "background_color": "#hex", "border_color": "#hex", "border_weight_pt": ..., "font_size_pt": ..., "bold": true/false, "italic": true/false, "font_family": "...", "color": "#hex"}
+
+For NUMBERED LISTS or "N things" layouts (e.g. "2 things I hated", "3 things I learned"), use ROLE-based instructions so layout is automatic. Omit x_pt, y_pt, width_pt, height_pt and use "role" instead:
+- {"action": "create_shape", "role": "title", "shape_type": "TEXT_BOX", "text": "...", ...style...}
+- {"action": "create_shape", "role": "item_1_number", "shape_type": "TEXT_BOX", "text": "1", ...style...}
+- {"action": "create_shape", "role": "item_1_text", "shape_type": "TEXT_BOX", "text": "First point here", ...style...}
+- {"action": "create_shape", "role": "item_2_number", "shape_type": "TEXT_BOX", "text": "2", ...style...}
+- {"action": "create_shape", "role": "item_2_text", "shape_type": "TEXT_BOX", "text": "Second point", ...style...}
+Use roles "title", "item_N_number", "item_N_text" for each numbered item. Positions will be assigned automatically and aligned.
 
 Line instruction:
 {"action": "create_line", "line_type": "STRAIGHT"|"BENT"|"CURVED", "start_x_pt": ..., "start_y_pt": ..., "end_x_pt": ..., "end_y_pt": ..., "color": "#hex", "weight_pt": ...}
 
+MUST GET RIGHT (use exact values from "Presentation visual style" and element list):
+1. Text font: Set "font_family" to one of the Common fonts from the presentation style for EVERY text shape. No other fonts.
+2. Text color: Set "color" to one of the Common text colors from the presentation style (often #000000). Use the exact hex from the deck.
+3. Text box fill: Set "background_color" to the exact hex from Common background fills that matches similar elements (e.g. title box fill = same as other title boxes; list/body box fill = same as other list boxes). Use values from the element list (bg:) when given.
+4. Text box outline: Set "border_color" from Common border/outline colors or from element list (border: #hex). Set "border_weight_pt" (e.g. 1–2) when existing slides show a visible outline (see element list border_weight). If boxes on existing slides have a border, copy that.
+
 Rules:
 - ALWAYS include "text" with actual content when user asks to add a section/content about something.
-- For background_color and color (text): use ONLY hex values from existing elements (style and bg: in the element list) or from "Common background fills" / "Common text accent colors" in the presentation. Do not use #ffffff or generic gray unless the deck already uses them.
+- For numbered lists or "N things" / "N items" slides, PREFER role-based create_shape (title, item_1_number, item_1_text, item_2_number, item_2_text, ...) so number and text boxes align and do not overlap.
+- Use ONLY hex values from the presentation style and element list for background_color, color, and border_color. Use shape_type TEXT_BOX or RECTANGLE (or ROUND_RECTANGLE if the deck uses rounded corners).
 - Use RECTANGLE or ROUND_RECTANGLE with background_color for card-style sections.
-- A new element at y=Y with height=H MUST fit within a free-space gap: Y >= gap_start AND Y + H <= gap_end.
+- When using coordinates (no role), a new element at y=Y with height=H MUST fit within a free-space gap: Y >= gap_start AND Y + H <= gap_end.
 - If content doesn't fit, SHRINK height or font size to fit within the gap.
 - You can also move/resize existing elements to make room: {"action": "move"|"resize"|"move_and_resize", "objectId": "...", ...}
 - No markdown fences. Output ONLY the JSON object."""
@@ -52,12 +67,29 @@ CREATE_SLIDE_PROMPT = """You design a new Google Slides slide from scratch using
 Output a JSON object:
 {"instructions": [...], "message": "brief summary", "insert_after": "current"|"end"|<index>}
 
-Each instruction creates a shape on the NEW slide:
+Each instruction creates a shape on the NEW slide. You may use EITHER coordinates OR roles:
+
+With coordinates:
 {"action": "create_shape", "shape_type": "TEXT_BOX"|"RECTANGLE"|"ROUND_RECTANGLE"|etc., "x_pt": ..., "y_pt": ..., "width_pt": ..., "height_pt": ..., "text": "...", "background_color": "#hex", "border_color": "#hex", "border_weight_pt": ..., "font_size_pt": ..., "bold": true/false, "italic": true/false, "font_family": "...", "color": "#hex"}
 
+For NUMBERED LISTS or "N things" slides (e.g. "2 things I hated", "3 new things I learned"), use ROLES and omit x_pt, y_pt, width_pt, height_pt so layout is automatic:
+- {"action": "create_shape", "role": "title", "shape_type": "TEXT_BOX", "text": "2 things I hated", ...style...}
+- {"action": "create_shape", "role": "item_1_number", "shape_type": "TEXT_BOX", "text": "1", ...style...}
+- {"action": "create_shape", "role": "item_1_text", "shape_type": "TEXT_BOX", "text": "First point", ...style...}
+- {"action": "create_shape", "role": "item_2_number", "shape_type": "TEXT_BOX", "text": "2", ...style...}
+- {"action": "create_shape", "role": "item_2_text", "shape_type": "TEXT_BOX", "text": "Second point", ...style...}
+Use roles "title", "item_N_number", "item_N_text" for each item. Positions will be assigned and aligned automatically.
+
+MUST GET RIGHT (use exact values from "Presentation visual style" and element list):
+1. Text font: Set "font_family" to one of the Common fonts for EVERY text shape. Use "bold": true for title-style text when the deck does. No other fonts.
+2. Text color: Set "color" to one of the Common text colors (often #000000). Exact hex from the deck.
+3. Text box fill: Set "background_color" to the exact hex from Common background fills that matches similar elements (title box = same fill as other title boxes; list/body boxes = same fill as other list boxes). Use element list (bg:) when given.
+4. Text box outline: Set "border_color" from Common border/outline colors or from element list (border: #hex). Set "border_weight_pt" from element list (border_weight) when present, or use 1–2 when existing slides show a visible outline. Copy border style from existing slides.
+
 Rules:
+- For "N things", "N items", numbered lists, PREFER role-based instructions (title, item_1_number, item_1_text, ...) so number and text boxes align and do not overlap.
 - Design a COMPLETE slide layout — add title, body content, decorative elements as needed.
-- For every shape, set background_color and color (text) using ONLY the hex values from "Common background fills" and "Common text accent colors" / "Common fonts" in the presentation visual style. Do not invent colors; do not use #ffffff or generic gray unless the deck uses them.
+- Use ONLY hex values from the presentation style and element list. Use shape_type TEXT_BOX, RECTANGLE, or ROUND_RECTANGLE to match existing box shapes (sharp vs rounded corners).
 - Cover the full slide area (dimensions provided). Don't leave the slide empty.
 - Generate real, substantive content for the topic the user requested.
 - Use shapes with background_color for card-style sections, matching existing bg: colors.
@@ -81,7 +113,7 @@ Update shape fill/background (for text boxes and shapes): {"action": "update_sha
 Rules:
 - replace_text replaces ALL text in the element.
 - update_text_style applies to ALL text in the element (color = text color).
-- update_shape_fill changes the shape's background fill and/or border. Use when the user says "change the background/fill color", "match the colors", "make these boxes the same color as the rest of the slideshow". Use hex values from the slide's existing elements (style and bg: in the element list) or from "Common background fills" / "Common text accent colors" in the presentation style.
+- update_shape_fill changes the shape's background fill and/or border. Use when the user says "change the background/fill color", "match the colors", "make these boxes the same color as the rest of the slideshow". Use hex values from the slide's existing elements (style and bg: in the element list) or from "Common background fills" / "Common text colors" in the presentation style.
 - You can combine replace_text, update_text_style, and update_shape_fill on the same or different elements.
 - When the user wants colors to match the slideshow, apply update_shape_fill (and update_text_style for text color) to the relevant elements using the deck's actual colors from the context.
 - No markdown fences. Output ONLY the JSON object."""
