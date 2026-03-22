@@ -173,6 +173,7 @@ Slide dimensions: {page_width_pt} x {page_height_pt} points (origin top-left, co
 
 User request: {user_message}
 {layout_context_block}
+{style_from_image_block}
 
 Your task: Output a JSON object with instructions to ADD the requested content so it matches the slide's existing style and layout. Use this exact format (no markdown, no code fence):
 {{"instructions": [...], "message": "brief summary"}}
@@ -183,6 +184,7 @@ Instructions:
 - You MUST include x_pt, y_pt, width_pt, height_pt for every create_shape. Use FREE SPACE / GAP and Elements; for new columns, align with existing column positions.
 - **Empty TEXT_BOX in the band under the title (above 3 column cards):** Match those **card/body** boxes — same **border_color** (usually light grey like the columns, **not** black), **border_weight_pt**, **background_color**, and align **x_pt / width_pt** with the **left–right span of the column row** (do not stretch full slide edge-to-edge). **height_pt** ≥ **72pt** (or ~70–85% of the GAP); no paper-thin strips. Keep **12–24pt clear gap** between this box’s bottom and the tops of the column cards (use Element y positions); shorten the box if it would touch.
 - Match visual style of **the same class of element** (body cards vs title chrome).
+- If a **Style already extracted from this same screenshot** section appears above, use those **exact** hex values and font for create_shape fields (border_color, background_color, color, font_family) when they apply — do not contradict that block.
 - When adding a new section/column that should match existing ones (e.g. "3" next to "1" and "2"): create 1) an outer RECTANGLE for the section, 2) a small TEXT_BOX for the number label (e.g. "3"), 3) a TEXT_BOX for the section title, 4) a TEXT_BOX for the body text. Position them using the coordinates from the layout context so the new column sits in the empty space and aligns with existing columns.
 - Do not create move/resize instructions for existing elements unless the user asked to move something. Only create new shapes when replace_text is not the right approach.
 Output only the JSON object, nothing else."""
@@ -194,6 +196,7 @@ def generate_content_instructions_from_image(
     page_width_pt: float,
     page_height_pt: float,
     layout_context: Optional[str] = None,
+    style_values: Optional[dict] = None,
 ) -> tuple[list[dict], str]:
     """
     Use Gemini vision to generate create_shape (and optionally create_line) instructions
@@ -201,6 +204,9 @@ def generate_content_instructions_from_image(
     When layout_context is provided (current slide description with FREE SPACE gaps and
     element positions from the Slides API), Gemini can place new content in the correct
     empty region.
+    When style_values is provided (from extract_style_from_slide_image on the same image),
+    it is injected into the prompt so placement and colors stay consistent — and the caller
+    should reuse that same dict for normalize_instructions_style (no second vision pass).
     """
     if not screenshot_base64 or not screenshot_base64.strip():
         return [], ""
@@ -216,6 +222,14 @@ def generate_content_instructions_from_image(
     layout_context_block = ""
     if layout_context and layout_context.strip():
         layout_context_block = "\n\nCurrent slide layout (from API — use FREE SPACE and Elements to place new content in the right spot):\n" + layout_context.strip()
+    style_from_image_block = ""
+    if style_values:
+        style_from_image_block = (
+            "\n\nStyle already extracted from this same screenshot (use these exact values in "
+            "create_shape where they apply; body/card borders often use primary_border_colors[0] "
+            "or section_border_color):\n"
+            + format_style_for_prompt(style_values)
+        )
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = CREATE_CONTENT_VISION_PROMPT_TEMPLATE.format(
@@ -223,6 +237,7 @@ def generate_content_instructions_from_image(
         page_width_pt=page_width_pt,
         page_height_pt=page_height_pt,
         layout_context_block=layout_context_block,
+        style_from_image_block=style_from_image_block,
     )
     parts = [
         {"inline_data": {"mime_type": mime_type, "data": image_bytes}},

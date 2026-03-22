@@ -155,11 +155,17 @@ def handle_edit_slides(
 
     elif operation == "create_content":
         if slide_screenshot:
-            # Gemini analyzes the screenshot and produces instructions (placement + style). Pass full_desc so Gemini knows FREE SPACE gaps and element positions.
+            # One extract_style pass, then placement Gemini sees the same values; reuse dict for normalize (no second vision call on the same screenshot).
+            vision_style_values = vision_style.extract_style_from_slide_image(slide_screenshot)
             instructions, llm_message = vision_style.generate_content_instructions_from_image(
-                slide_screenshot, user_message, page_w_pt, page_h_pt, layout_context=full_desc
+                slide_screenshot,
+                user_message,
+                page_w_pt,
+                page_h_pt,
+                layout_context=full_desc,
+                style_values=vision_style_values,
             )
-            precomputed_style_values = vision_style.extract_style_from_slide_image(slide_screenshot)
+            precomputed_style_values = vision_style_values
             if instructions:
                 content_from_gemini = True
             elif precomputed_style_values:
