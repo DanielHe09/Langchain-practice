@@ -128,3 +128,11 @@ The same Google token is sent with chat requests (header `X-Google-Access-Token`
 2. Build the frontend from `frontend/`: `npm run build`.
 3. In Chrome, load the unpacked extension from `frontend/dist`.
 4. Open the extension popup, sign in (Supabase), optionally Connect Google, and use the chat. Visiting pages will capture screenshots and send them to the backend for embedding; chat uses hybrid retrieval and the tool-calling agent to return one action per request (chat only, open tab, send email, or edit slides) that the extension can execute.
+
+---
+
+## Next Steps:
+
+1. multi-tool call loop
+2. planning loop (task decomposition, step planning, goal tracking)
+3. persistent working state (current goal, plan (multi-step), intermediate results, tool outputs, world model (files, codebase, UI state, etc.), memory (short-term + long-term))
